@@ -1,4 +1,4 @@
-/** @jsxImportSource solid-js */
+/** @jsxImportSource @opentui/solid */
 /**
  * capy-lead TUI — team strip, team tree, and attention notifications.
  *
