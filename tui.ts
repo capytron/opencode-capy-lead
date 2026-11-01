@@ -122,7 +122,7 @@ export default {
     // ---- 1. strip ---------------------------------------------------------
     const offStrip = context.ui.slot({
       append: "prompt.footer.status",
-      render: () => jsx(TeamStrip, { context, get rows() { return rows() } }),
+      render: () => jsx(TeamStrip, { context, rows }),
     })
 
     // ---- 2a. interactive panel (/capy-team) --------------------------------
@@ -134,7 +134,7 @@ export default {
             return panel.name === "capy-lead.team"
           },
           get children() {
-            return jsx(TeamPanel, { context, panel, get rows() { return rows() }, jump, get tick() { return tick() } })
+            return jsx(TeamPanel, { context, panel, rows, jump, tick })
           },
         }),
     })
@@ -142,7 +142,7 @@ export default {
     // ---- 2b. compact sidebar tree ------------------------------------------
     const offSidebar = context.ui.slot({
       append: "sidebar.content",
-      render: () => jsx(TeamSidebar, { context, get rows() { return rows() }, jump, get tick() { return tick() } }),
+      render: () => jsx(TeamSidebar, { context, rows, jump, tick }),
     })
 
     // ---- 2c. /capy-team command (palette + slash) ---------------------------
