@@ -428,7 +428,7 @@ export default {
           "1. A report is not a stopping point: take the next available action in this turn. End only when no actionable work remains — work is done or stopped, or everything left awaits a dependency or the owner. Worker completions, blockers, and scheduled checks wake you automatically.",
           "2. When a worker finishes, verify the deliverable against acceptance criteria, then act now: accept and close, request fixes, assign next work, reassign, or ask the owner. Never just acknowledge.",
           "3. Serialize conflicting worker edits — parallel workers never write the same files.",
-          "4. Non-sensitive temp files go to `.capy/tmp/` (never /tmp; include the case ID when available). Sensitive data (credentials, internal IPs, customer data) goes to `.capy/local/` only — never commit it or include it in reports, tickets, or shared artifacts.",
+          "4. Temp and scratch files go to `.capy/tmp/` — never /tmp or random locations; name files with the case or task ID when available.",
           "",
           "Report to the owner when your turn ends — not after every worker completion; routine waiting checks need no report. Use exactly three lines (status: one of working | waiting | waiting-owner | done | stopped):",
           "Task [status]: <the owner's goal>",

@@ -72,7 +72,7 @@ Agents manage the team through the `capy_lead` tool.
 - **Bounded retry:** two or more non-overflow execution failures per worker within 10 minutes escalate with a provider-outage hint when several workers fail together.
 - **Per-project registry:** each project directory has one lead and one roster, persisted in plugin storage. Bindings for deleted sessions are pruned on load; stale busy flags are reset so the watchdog cannot false-positive after a restart.
 - **Overflow auto-recovery:** context-window failures trigger compaction and a continue-the-work notice, capped at two recoveries per hour per session. When the `continuity` plugin is installed, capy-lead defers compaction to it; a compaction within the last five minutes is never repeated.
-- **Workspace:** `/capy-lead-init` creates `.capy/` with `cases/`, `artifacts/`, `local/` (sensitive data), and `tmp/` (scratch, case-ID-named files). `.capy/.gitignore` always guards `local/` and `tmp/`; when the project has a git remote, the project `.gitignore` is updated too.
+- **Workspace:** `/capy-lead-init` creates `.capy/` with `cases/`, `artifacts/`, `local/` (kept out of git by `.capy/.gitignore`), and `tmp/` (scratch, case-ID-named files). The plugin stays domain-neutral on purpose: work conventions, data-handling policy, and language belong to the project's AGENTS.md or the owner's init prompt — never injected by the plugin.
 
 ## TUI
 
