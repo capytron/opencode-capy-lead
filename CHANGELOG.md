@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.1 — 2026-11-03
+
+Second blind 4-model review (glm-5.3, argon, kimi-k3, astra — neutral prompt, full folder including the TUI). Fixes:
+
+- **Structured notify `kind`** (`done | progress | blocked | question`) replaces keyword/regex urgency detection entirely — word lists can never cover every language or persona and short substrings over-match ("ติดตั้งเสร็จแล้ว" is a success report). `blocked`/`question` wake the lead; the worker states its intent, the system never guesses.
+- **Core-loop wake restored**: the finish-notice cooldown was armed by every notify, including queued ones that never woke the lead — the most common report flow left the lead asleep. Cooldown now arms only after an actual steer.
+- **TUI form notifications resurrected**: the handler read `event.data.sessionID`, but the payload is `{ form }` — the feature had been dead since it was written.
+- **Wait budget deadlock + false alarm fixed**: budget-exhausted at the `wait` tool now drops the record and wakes the lead immediately (rejecting alone deadlocked the worker); the heartbeat no longer declares "budget exhausted" while the worker is still busy in its final check.
+- **Delivery guarantees**: failed startup wakes roll back (like the heartbeat); exhausted/abandoned decision requests restore the record when the lead wake fails — nothing is deleted before its wake succeeds.
+- `retry` session status now counts as busy (a due check can no longer fire mid-retry); `waitForSessionId` wakes immediately instead of waiting up to 60s; the idle gate reads wait state before the mute check; `bind` removes the caller from the worker roster (parity with init); destroy rollback restores the persona and waits and strips the transient error field; TUI filters teams by project directory (multi-project safe); notify quota counts delivered messages only; typo fix and dead slot removal; LICENSE added; `exports` map added for git installs.
+
 ## v0.4.0 — 2026-11-02
 
 **Tracking conventions (ticket-model-v2).** The init flow now runs a one-time onboarding: adopt an existing rule (AGENTS.md / `.capy/team.md` / init prompt), infer one silently when the init prompt already carries a task, or offer three modes. Each mode loads only its own rules into the lead's context:

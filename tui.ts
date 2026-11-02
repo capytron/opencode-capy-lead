@@ -39,9 +39,13 @@ export default {
   id: "capylead.tui",
   async setup(context) {
     // The lead is the session whose capyTeam stamp names itself; copies
-    // inherited by children name a different id and are ignored.
+    // inherited by children name a different id and are ignored. Sessions
+    // known to live in another project's directory are skipped so multiple
+    // capy-lead projects in one TUI cannot show each other's teams.
     const team = createMemo(() => {
+      const directory = (context.location ?? context.data.location.default()).directory
       for (const session of context.data.session.list()) {
+        if (session.directory !== undefined && session.directory !== directory) continue
         const stamp = session.metadata?.capyTeam
         if (stamp && stamp.leadID === session.id) return { lead: session, workers: stamp.workers ?? [] }
       }
@@ -76,7 +80,10 @@ export default {
     const offForm = context.data.on("form.created", (event) => {
       const current = team()
       if (!current) return
-      const id = event.data.sessionID
+      // The real payload is { form: Info } — sessionID lives on the form
+      // object (a blind-review find: the old top-level read was always
+      // undefined, silently killing this whole feature).
+      const id = event.data.form?.sessionID
       if (!id) return
       if (id === current.lead.id) {
         attention("The lead is waiting for your answer", id, "warning", "question")
@@ -154,7 +161,7 @@ export default {
         return
       }
       if (context.ui.panel.open("capy-lead.team")) return
-      context.ui.toast.show({ title: "capy-lead", message: "Open a session first, then /capy-team-view-view", variant: "info" })
+      context.ui.toast.show({ title: "capy-lead", message: "Open a session first, then /capy-team-view", variant: "info" })
     }
     context.keymap.layer(() => ({
       mode: "global",
@@ -174,18 +181,12 @@ export default {
         },
       ],
     }))
-    const offCommandSlot = context.ui.slot({
-      append: "app",
-      render: () => null,
-    })
-
     return () => {
       offFailed()
       offForm()
       offStrip()
       offPanel()
       offSidebar()
-      offCommandSlot()
     }
   },
 }
