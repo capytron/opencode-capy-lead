@@ -11,7 +11,7 @@
  * explicitly and all elements are created through jsx()/jsxs() calls.
  *
  * 1. Team strip (prompt.footer.status): `capy ▶ 2/3 ✓1 ✗0`
- * 2. Team tree: `/capy-team` opens an interactive panel (up/down move,
+ * 2. Team tree: `/capy-team-view` opens an interactive panel (up/down move,
  *    return opens the selected session, escape closes; click also opens);
  *    a compact tree is appended to the sidebar.
  * 3. Attention notifications, quiet by default: worker failure and pending
@@ -125,7 +125,7 @@ export default {
       render: () => jsx(TeamStrip, { context, rows }),
     })
 
-    // ---- 2a. interactive panel (/capy-team) --------------------------------
+    // ---- 2a. interactive panel (/capy-team-view) --------------------------------
     const offPanel = context.ui.slot({
       append: "session.panel",
       render: (panel) =>
@@ -145,7 +145,7 @@ export default {
       render: () => jsx(TeamSidebar, { context, rows, jump, tick }),
     })
 
-    // ---- 2c. /capy-team command (palette + slash) ---------------------------
+    // ---- 2c. /capy-team-view command (palette + slash) ---------------------------
     const openPanel = () => {
       const route = context.ui.router.current()
       const current = context.ui.panel.current()
@@ -154,7 +154,7 @@ export default {
         return
       }
       if (context.ui.panel.open("capy-lead.team")) return
-      context.ui.toast.show({ title: "capy-lead", message: "Open a session first, then /capy-team", variant: "info" })
+      context.ui.toast.show({ title: "capy-lead", message: "Open a session first, then /capy-team-view-view", variant: "info" })
     }
     context.keymap.layer(() => ({
       mode: "global",
@@ -165,7 +165,7 @@ export default {
         {
           id: "capylead.team.open",
           title: "Open the capy-lead team tree",
-          slash: { name: "capy-team" },
+          slash: { name: "capy-team-view" },
           group: "capy-lead",
           palette: true,
           run: () => {

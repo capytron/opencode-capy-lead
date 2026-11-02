@@ -15,8 +15,8 @@
  *     the registry, unbind the lead. Partial failures keep the lead bound so
  *     destroy can simply be run again. The lead session itself is never
  *     deleted, and neither are its ancestors (remove() is recursive).
- *   `/capy-lead-persona <text>`   update the lead persona.
- *   `/capy-lead-team`             show this project's team in the calling session.
+ *   `/capy-set-persona <text>`   update the lead persona.
+ *   `/capy-team-info`             show this project's team in the calling session.
  *   Tool `capy_lead` (agent-facing): bind/unbind (lead-guarded), add/remove
  *     workers (lead only, ancestors of the lead rejected), list (open).
  *     Delegation is optional — the lead decides per task.
@@ -272,7 +272,7 @@ export default {
             if (lead && !(await sessionAlive(lead.sessionID))) {
               await ctx.storage.remove(key("lead"))
             } else if (lead && lead.sessionID !== sessionID) {
-              return { error: `Another lead exists: ${lead.sessionID} — run /capy-lead-destroy from that session first, or /capy-lead-persona to only change the persona` }
+              return { error: `Another lead exists: ${lead.sessionID} — run /capy-lead-destroy from that session first, or /capy-set-persona to only change the persona` }
             }
             const previous = await readLead()
             const nextPersona = persona ?? previous?.persona
@@ -383,15 +383,15 @@ export default {
       })
 
       commands.add({
-        name: "capy-lead-persona",
-        description: "Edit the lead's persona — /capy-lead-persona <persona text>",
+        name: "capy-set-persona",
+        description: "Edit the lead's persona — /capy-set-persona <persona text>",
         async execute({ sessionID, prompt }) {
           const persona = singleLine(prompt.text ?? "", MAX_PERSONA)
           const updated = await mutate(async () => {
             const lead = await readLead()
             if (!lead) return { error: "No lead yet — run /capy-lead-init first" }
             if (!persona)
-              return { error: `Usage: /capy-lead-persona <persona text> — current persona: ${lead.persona ?? "(none)"}` }
+              return { error: `Usage: /capy-set-persona <persona text> — current persona: ${lead.persona ?? "(none)"}` }
             await ctx.storage.set(key("lead"), { ...lead, persona })
             return { lead }
           })
@@ -414,7 +414,7 @@ export default {
       })
 
       commands.add({
-        name: "capy-lead-team",
+        name: "capy-team-info",
         description: "View this project's lead and all registered workers",
         async execute({ sessionID }) {
           const view = await mutate(async () => ({ lead: await readLead(), workers: Object.values(await readWorkers()) }))

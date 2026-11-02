@@ -22,19 +22,19 @@ Use the quick-install command above, or add the package to the configuration arr
 
 1. Install the plugin using either method above.
 3. Have the lead create worker sessions with `parentID` set to its session ID for automatic registration, or register existing project sessions through `capy_lead add`.
-4. Open `/capy-team` to inspect the team and navigate to sessions. Use `/capy-lead-team` to print the roster into the conversation.
+4. Open `/capy-team-view` to inspect the team and navigate to sessions. Use `/capy-team-info` to print the roster into the conversation.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `/capy-lead-init [persona]` | Bind the current session as this project's lead. |
-| `/capy-lead-persona <text>` | Set the lead's persona. |
-| `/capy-lead-team` | Print the roster into the conversation. |
+| `/capy-set-persona <text>` | Set the lead's persona. |
+| `/capy-team-info` | Print the roster into the conversation. |
 | `/capy-lead-destroy` | Interrupt and delete all workers, including orphans, clear the roster, and unbind the lead. See destroy semantics below. |
-| `/capy-team` | Open the interactive TUI team panel; also available in the command palette. |
+| `/capy-team-view` | Open the interactive TUI team panel; also available in the command palette. |
 
-All commands except `/capy-team` are server commands.
+All commands except `/capy-team-view` are server commands.
 
 ## Agent tool
 
@@ -69,7 +69,7 @@ capy ▶ 2/3 ✓1 ✗0
 - `2/3`: running workers / total workers.
 - `✓1` and `✗0`: counts of succeeded and failed last outcomes.
 
-In `/capy-team`, **up/down** moves the selection, **return** opens the selected session, and **escape** closes the panel. Clicking a session opens it. A compact team tree also appears in the sidebar.
+In `/capy-team-view`, **up/down** moves the selection, **return** opens the selected session, and **escape** closes the panel. Clicking a session opens it. A compact team tree also appears in the sidebar.
 
 Worker failures and pending team questions produce toast notifications, with desktop notifications and sound when the terminal is unfocused. Successful rounds are silent.
 
