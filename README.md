@@ -21,7 +21,6 @@ Use the quick-install command above, or add the package to the configuration arr
 ## Getting started
 
 1. Install the plugin using either method above.
-2. Run `/capy-lead-init [persona]` to bind the current session as the project's lead, or `/capy-lead-new [persona]` to create a new lead session with a capability briefing.
 3. Have the lead create worker sessions with `parentID` set to its session ID for automatic registration, or register existing project sessions through `capy_lead add`.
 4. Open `/capy-team` to inspect the team and navigate to sessions. Use `/capy-lead-team` to print the roster into the conversation.
 
@@ -30,7 +29,6 @@ Use the quick-install command above, or add the package to the configuration arr
 | Command | Purpose |
 | --- | --- |
 | `/capy-lead-init [persona]` | Bind the current session as this project's lead. |
-| `/capy-lead-new [persona]` | Create a new lead session with a capability briefing. |
 | `/capy-lead-persona <text>` | Set the lead's persona. |
 | `/capy-lead-team` | Print the roster into the conversation. |
 | `/capy-lead-destroy` | Interrupt and delete all workers, including orphans, clear the roster, and unbind the lead. See destroy semantics below. |
@@ -75,25 +73,10 @@ In `/capy-team`, **up/down** moves the selection, **return** opens the selected 
 
 Worker failures and pending team questions produce toast notifications, with desktop notifications and sound when the terminal is unfocused. Successful rounds are silent.
 
-## Configuration options
 
-`leadModel` selects the model used by `/capy-lead-new`. Unset, the server default model applies.
 
-```json
-{
-  "plugins": [
-    {
-      "package": "capytron/opencode-capy-lead",
-      "options": {
-        "leadModel": {
-          "providerID": "9router",
-          "id": "glm/glm-5.3"
-        }
-      }
-    }
   ]
 }
-```
 
 ## Limitations
 

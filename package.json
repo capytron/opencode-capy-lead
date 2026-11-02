@@ -5,7 +5,5 @@
   "type": "module",
   "private": false,
   "license": "MIT",
-  "peerDependencies": {
-    "@opencode/plugin": "^2.0.27 || ^0.0.0-dev"
   }
 }

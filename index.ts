@@ -17,8 +17,6 @@
  *     deleted, and neither are its ancestors (remove() is recursive).
  *   `/capy-lead-persona <text>`   update the lead persona.
  *   `/capy-lead-team`             show this project's team in the calling session.
- *   `/capy-lead-new [persona]`    create a fresh lead session with a capability
- *     briefing (uses the leadModel option; unset = the server default model).
  *   Tool `capy_lead` (agent-facing): bind/unbind (lead-guarded), add/remove
  *     workers (lead only, ancestors of the lead rejected), list (open).
  *     Delegation is optional — the lead decides per task.
@@ -51,10 +49,6 @@ export default {
     const dir = ctx.location.directory
     const controller = new AbortController()
 
-    // Model for /capy-lead-new sessions: configured via plugin options
-    // ({ "package": "...", "options": { "leadModel": { "providerID": "...", "id": "..." } } }).
-    // Unset = the server default model.
-    const LEAD_MODEL = ctx.options?.leadModel
     const MAX_PERSONA = 500
     const MAX_ROLE = 200
     /** Overflow auto-recovery attempts per session per hour. */
@@ -440,44 +434,7 @@ export default {
         },
       })
 
-      commands.add({
-        name: "capy-lead-new",
-        description: "Create a new lead session with a capability briefing — /capy-lead-new <persona text>",
-        async execute({ sessionID, prompt }) {
-          const free = await mutate(async () => {
-            const lead = await readLead()
-            if (lead && (await sessionAlive(lead.sessionID)))
-              return { error: `A lead already exists: ${lead.sessionID} — run /capy-lead-destroy from that session first, or /capy-lead-persona to only change the persona` }
-            if (lead) await ctx.storage.remove(key("lead"))
-            return { ok: true }
-          })
-          if (free.error) throw new Error(free.error)
-          const persona = singleLine(prompt.text ?? "", MAX_PERSONA) || undefined
-          const projectName = dir.split("/").filter(Boolean).pop() ?? dir
-          const base = { title: `Lead — ${projectName}`, location: { directory: dir } }
-          const created = await ctx.session.create({ ...base, ...(LEAD_MODEL ? { model: LEAD_MODEL } : {}) })
-          await mutate(async () => void (await ctx.storage.set(key("lead"), { sessionID: created.id, persona })))
-          await stampTeam()
-          try {
-            await ctx.session.prompt({
-              sessionID: created.id,
-              text: capabilityNotice(persona),
-              delivery: "queue",
-              resume: true,
-            })
-          } catch (error) {
-            await mutate(async () => void (await ctx.storage.remove(key("lead"))))
-            throw new Error(`Session created but sending the briefing failed (${created.id}) — lead unbound. Try again: ${String(error)}`)
-          }
-          await ctx.session.synthetic({
-            sessionID,
-            description: "capy-lead created",
-            text: `New lead created: ${created.id} (title: ${created.title ?? ""}) — loading capability briefing. Use opencode attach to chat now`,
-            resume: true,
-          })
-        },
-      })
-    })
+     })
 
     // --- agent tool ---------------------------------------------------------
     await ctx.tool.transform((tools) => {
