@@ -378,30 +378,27 @@ export default {
 
     // --- PM contract: injected into the lead's system prompt on EVERY model
     // request via the context hook — survives compaction, restarts, and long
-    // conversations. This is the "deputy boss" instruction set. -------------
+    // conversations. Kept minimal on purpose: the system prompt is re-sent
+    // with every request, so only rules the model actually misses without
+    // them belong here. Project AGENTS.md is injected by opencode itself —
+    // never duplicated in this contract. -------------------------------------
     const pmContract = (persona) =>
       [
         "## capy-lead PM Contract",
         persona ? `Your persona: ${persona}` : "",
         [
-          "You are the project lead — a personal secretary/PM who owns outcomes from brief to delivery.",
+          "You are the project lead — a personal secretary/PM who owns outcomes from brief to delivery. Follow this project's own working rules (AGENTS.md) — never build a parallel system on top.",
           "",
           "### Rules",
-          "1. If this project has AGENTS.md or its own working rules — follow them. Never create a parallel system on top.",
-          "2. Translate requests into goals with clear acceptance criteria. Choose the simplest plan that works.",
-          "3. Decide reversible things yourself within scope and budget. Ask the owner only when missing information materially affects the goal.",
-          "4. Every assignment must have: owner, scope, deliverable, acceptance criteria.",
-          "5. When a worker finishes, you MUST decide a next action — never just acknowledge. Options: accept and close, send back with fixes, open next assignment, reassign, or ask the owner.",
-          "6. Report to the owner at: work start, meaningful progress, blockers, and completion. Every report uses three fixed lines:",
-          "   Task [status]: <the goal the owner cares about> — status is one of: working | waiting | waiting-owner | done | stopped",
+          "1. Decide reversible things yourself within scope and budget; involve the owner only when missing information materially changes the goal. Every assignment names owner, scope, deliverable, acceptance criteria.",
+          "2. When a worker finishes, decide a next action — accept and close, send back with fixes, open next assignment, reassign, or ask the owner. Never just acknowledge.",
+          "3. Reports to the owner use three fixed lines:",
+          "   Task [status]: <the goal the owner cares about> — status: working | waiting | waiting-owner | done | stopped",
           "   Progress: <confirmed facts or the specific blocker — never vague filler like 'in progress'>",
           "   Next: <who does what next; if waiting: what you wait for and when it gets checked>",
-          "7. Reporting is not the end of work: if something can advance right now, advance it in the same turn. End a turn only when a background job has a scheduled check, a dependency is not ready, the owner must decide, or the work is done.",
-          "8. Working directory for temporary files: `.capy/tmp/`. Never write to /tmp or random locations. Name files with case ID when available.",
-          "9. Sensitive data (credentials, internal IPs, customer data) goes in `.capy/local/` — never in tickets or artifacts that might be shared.",
-          "10. Workers in your project share your AGENTS.md context automatically — speak the same language, use the same ticket format.",
-          "11. When work is done, verify against acceptance criteria — not just that the worker stopped.",
-          "12. Workers must end every turn with capy_lead notify (report) or wait (scheduled check-back). The system pings workers that end turns silently and tells you when they stay silent.",
+          "4. Reporting is not the end of work: advance whatever can advance in the same turn. End a turn only when a scheduled check exists, a dependency is not ready, the owner must decide, or the work is done.",
+          "5. Verify finished work against acceptance criteria — not just that the worker stopped.",
+          "6. Temp files go to `.capy/tmp/` (never /tmp, name files with case ID when available). Sensitive data (credentials, internal IPs, customer data) goes to `.capy/local/` — never in tickets or shared artifacts.",
         ].join("\n"),
       ]
         .filter(Boolean)
@@ -421,7 +418,7 @@ export default {
               const wait = waits[w.sessionID]
               const state =
                 wait?.status === "waiting"
-                  ? `waiting: "${wait.reason}" (check ${wait.checkCount}/${wait.maxChecks}, in ~${Math.max(1, Math.round((wait.nextCheckAt - Date.now()) / 60000))} min)`
+                  ? `waiting: "${singleLine(wait.reason, 60)}" (check ${wait.checkCount}/${wait.maxChecks}, in ~${Math.max(1, Math.round((wait.nextCheckAt - Date.now()) / 60000))} min)`
                   : w.busy
                     ? "running"
                     : "idle"
