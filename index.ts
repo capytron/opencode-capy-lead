@@ -47,6 +47,7 @@ export default {
   id: "capylead",
   async setup(ctx) {
     const dir = ctx.location.directory
+    console.log("[capy-lead] instance loaded for", dir)
     const controller = new AbortController()
 
     const MAX_PERSONA = 500
@@ -61,6 +62,27 @@ export default {
     const COMPACT_DEDUP_MS = 5 * 60 * 1000
     /** Safety cap when following list() pagination. */
     const MAX_LIST_PAGES = 20
+    /** Heartbeat for the wait scheduler + silence watchdog. */
+    const HEARTBEAT_MS = 60 * 1000
+    /** Busy worker with no activity for this long → ask the lead to check. */
+    const SILENCE_WARN_MS = 30 * 60 * 1000
+    /** Stop silence-waking after this many unanswered wakes (until activity). */
+    const WATCHDOG_MAX_WAKES = 3
+    /** wait tool bounds (minutes). */
+    const WAIT_MIN_MINUTES = 1
+    const WAIT_MAX_MINUTES = 24 * 60
+    const WAIT_DEFAULT_MAX_CHECKS = 6
+    const WAIT_MAX_MAX_CHECKS = 20
+    /** Waits this overdue at startup wake only the lead, never the herd. */
+    const HERD_STALE_MS = 6 * 60 * 60 * 1000
+    const WAKE_STAGGER_MS = 3000
+    /** Non-overflow failures within this window escalate to the lead. */
+    const FAIL_WINDOW_MS = 10 * 60 * 1000
+    const FAIL_ESCALATE_AT = 2
+    /** After a gate escalation, stop pinging that worker for this long. */
+    const GATE_MUTE_MS = 15 * 60 * 1000
+    /** Worker-finish notices steer at most this often; repeats ride the queue. */
+    const NOTICE_COOLDOWN_MS = 60 * 1000
 
     const key = (k) => `capy:${dir}:${k}`
 
@@ -79,12 +101,14 @@ export default {
         const info = await ctx.session.get({ sessionID: lead.sessionID }).catch(() => undefined)
         if (!info) return
         const workers = Object.values(await readWorkers())
+        const waits = await readWaits()
         const metadata = { ...(info.metadata ?? {}) }
         metadata[STAMP_KEY] = {
           leadID: lead.sessionID,
           workers: workers.map((w) => ({
             sessionID: w.sessionID,
             role: w.role,
+            waiting: waits[w.sessionID]?.status === "waiting" ? waits[w.sessionID].reason : null,
             lastOutcome: w.lastOutcome ? (LEGACY_OUTCOME[w.lastOutcome] ?? w.lastOutcome) : null,
             lastOutcomeTime: w.lastOutcomeTime ?? null,
           })),
@@ -221,6 +245,56 @@ export default {
       }
     })()
 
+    // --- waits: durable scheduled check-backs --------------------------------
+    // One active wait per worker (map keyed by sessionID — re-registering
+    // overwrites). The plugin owns the schedule; the worker supplies the
+    // reason and performs the check when woken.
+    const readWaits = async () => {
+      const stored = await ctx.storage.get(key("waits"))
+      const out = {}
+      if (!stored || typeof stored !== "object") return out
+      for (const [id, value] of Object.entries(stored)) {
+        if (value && typeof value.sessionID === "string" && typeof value.nextCheckAt === "number") out[id] = value
+      }
+      return out
+    }
+    const writeWaits = (waits) => ctx.storage.set(key("waits"), waits)
+
+    // Idle Gate memory: per worker, whether this round already ended with a
+    // report (notify), whether the one reminder ping was used, and a mute
+    // window after escalation (a worker that keeps answering with plain text
+    // would otherwise ping-loop). In-memory: worst case after a reload is one
+    // extra reminder ping.
+    const roundActivity = new Map()
+    const gateArm = (sessionID, reported) =>
+      roundActivity.set(sessionID, { reported, pinged: false, mutedUntil: 0 })
+    // Last steer notice per worker (finish-notice cooldown).
+    const noticeLast = new Map()
+
+    const wakeLead = (leadSessionID, description, text, metadata = {}) =>
+      ctx.session
+        .synthetic({
+          sessionID: leadSessionID,
+          description,
+          metadata: { plugin: "capylead", ...metadata },
+          delivery: "steer",
+          resume: true,
+          text,
+        })
+        .catch((error) => console.error("[capy-lead] lead wake failed:", leadSessionID, error))
+
+    const wakeForWait = (wait) =>
+      ctx.session
+        .synthetic({
+          sessionID: wait.sessionID,
+          description: "capy-lead scheduled check",
+          metadata: { plugin: "capylead", waitCheck: wait.sessionID },
+          delivery: "steer",
+          resume: true,
+          text: `[capy-lead][wait] Scheduled check ${wait.checkCount}/${wait.maxChecks} for: "${wait.reason}". Perform the check you planned now. Still pending → call capy_lead action "wait" again with a longer interval (back off, e.g. 2→5→15 min). Done or blocked → call action "notify".`,
+        })
+        .catch((error) => console.error("[capy-lead] wait wake failed:", wait.sessionID, error))
+
     const continuityInstalled = async () => {
       try {
         return (await ctx.plugin.list()).some((plugin) => plugin.id === "continuity")
@@ -249,16 +323,58 @@ export default {
       const lead = await readLead()
       if (lead && !(await sessionAlive(lead.sessionID))) await ctx.storage.remove(key("lead"))
       const workers = await readWorkers()
+      const waits = await readWaits()
       let pruned = false
+      let waitsPruned = false
       for (const w of Object.values(workers)) {
         if (!(await sessionAlive(w.sessionID))) {
           delete workers[w.sessionID]
+          delete waits[w.sessionID]
           pruned = true
+          waitsPruned = true
         }
       }
       if (pruned) await ctx.storage.set(key("workers"), workers)
+      if (waitsPruned) await writeWaits(waits)
     })
     await stampTeam()
+
+    // Startup reconciliation: waits that came due while offline wake in a
+    // stagger (herd guard); anything stale (machine slept overnight) or out
+    // of check budget goes to the lead as ONE summary instead.
+    let reconcile = undefined
+    await mutate(async () => {
+      const waits = await readWaits()
+      const now = Date.now()
+      const due = Object.values(waits).filter((wait) => wait.status === "waiting" && wait.nextCheckAt <= now)
+      if (!due.length) return
+      const fresh = []
+      const stale = []
+      for (const wait of due) {
+        waits[wait.sessionID] = { ...wait, status: "woken" }
+        if (now - wait.nextCheckAt >= HERD_STALE_MS || wait.checkCount >= wait.maxChecks) stale.push(wait)
+        else fresh.push(wait)
+      }
+      await writeWaits(waits)
+      reconcile = { lead: await readLead(), fresh, stale }
+    })
+    if (reconcile) {
+      reconcile.fresh.forEach((wait, index) => {
+        setTimeout(() => {
+          if (controller.signal.aborted) return
+          void wakeForWait({ ...wait, checkCount: wait.checkCount + 1 })
+        }, index * WAKE_STAGGER_MS)
+      })
+      if (reconcile.stale.length && reconcile.lead)
+        void wakeLead(
+          reconcile.lead.sessionID,
+          "capy-lead stale waits after downtime",
+          `[capy-lead] The system was offline and these waits were NOT auto-woken (stale or out of check budget):\n${reconcile.stale
+            .map((wait) => `- "${wait.role}" (${wait.sessionID}): "${wait.reason}"`)
+            .join("\n")}\nDecide which to resume — tell the worker to register a fresh wait — and which to drop.`,
+          { reconcile: "stale" },
+        )
+    }
 
     // --- PM contract: injected into the lead's system prompt on EVERY model
     // request via the context hook — survives compaction, restarts, and long
@@ -276,11 +392,16 @@ export default {
           "3. Decide reversible things yourself within scope and budget. Ask the owner only when missing information materially affects the goal.",
           "4. Every assignment must have: owner, scope, deliverable, acceptance criteria.",
           "5. When a worker finishes, you MUST decide a next action — never just acknowledge. Options: accept and close, send back with fixes, open next assignment, reassign, or ask the owner.",
-          "6. Report to the owner at: work start, meaningful progress, blockers, and completion. Use plain language. Focus on: what was done, what's missing, what needs a decision.",
-          "7. Working directory for temporary files: `.capy/tmp/`. Never write to /tmp or random locations. Name files with case ID when available.",
-          "8. Sensitive data (credentials, internal IPs, customer data) goes in `.capy/local/` — never in tickets or artifacts that might be shared.",
-          "9. Workers in your project share your AGENTS.md context automatically — speak the same language, use the same ticket format.",
-          "10. When work is done, verify against acceptance criteria — not just that the worker stopped.",
+          "6. Report to the owner at: work start, meaningful progress, blockers, and completion. Every report uses three fixed lines:",
+          "   Task [status]: <the goal the owner cares about> — status is one of: working | waiting | waiting-owner | done | stopped",
+          "   Progress: <confirmed facts or the specific blocker — never vague filler like 'in progress'>",
+          "   Next: <who does what next; if waiting: what you wait for and when it gets checked>",
+          "7. Reporting is not the end of work: if something can advance right now, advance it in the same turn. End a turn only when a background job has a scheduled check, a dependency is not ready, the owner must decide, or the work is done.",
+          "8. Working directory for temporary files: `.capy/tmp/`. Never write to /tmp or random locations. Name files with case ID when available.",
+          "9. Sensitive data (credentials, internal IPs, customer data) goes in `.capy/local/` — never in tickets or artifacts that might be shared.",
+          "10. Workers in your project share your AGENTS.md context automatically — speak the same language, use the same ticket format.",
+          "11. When work is done, verify against acceptance criteria — not just that the worker stopped.",
+          "12. Workers must end every turn with capy_lead notify (report) or wait (scheduled check-back). The system pings workers that end turns silently and tells you when they stay silent.",
         ].join("\n"),
       ]
         .filter(Boolean)
@@ -294,8 +415,18 @@ export default {
           const lead = await readLead()
           if (!lead || lead.sessionID !== event.sessionID) return
           const workers = await readWorkers()
+          const waits = await readWaits()
           const roster = Object.values(workers)
-            .map((w) => `  ${w.role} (${w.sessionID}) ${w.busy ? "running" : "idle"}${w.lastOutcome ? ` last: ${w.lastOutcome}` : ""}`)
+            .map((w) => {
+              const wait = waits[w.sessionID]
+              const state =
+                wait?.status === "waiting"
+                  ? `waiting: "${wait.reason}" (check ${wait.checkCount}/${wait.maxChecks}, in ~${Math.max(1, Math.round((wait.nextCheckAt - Date.now()) / 60000))} min)`
+                  : w.busy
+                    ? "running"
+                    : "idle"
+              return `  ${w.role} (${w.sessionID}) ${state}${w.lastOutcome ? ` last: ${w.lastOutcome}` : ""}`
+            })
             .join("\n")
           event.system.push({
             type: "text",
@@ -379,6 +510,7 @@ export default {
               return { error: `This session is not the current lead${lead ? ` (lead is ${lead.sessionID})` : " (no lead yet)"}` }
             const workers = await readWorkers()
             await ctx.storage.set(key("workers"), {})
+            await writeWaits({})
             await ctx.storage.remove(key("lead"))
             return { leadSessionID: lead.sessionID, workers }
           })
@@ -489,7 +621,11 @@ export default {
         name: "capy-team-info",
         description: "View this project's lead and all registered workers",
         async execute({ sessionID }) {
-          const view = await mutate(async () => ({ lead: await readLead(), workers: Object.values(await readWorkers()) }))
+          const view = await mutate(async () => ({
+            lead: await readLead(),
+            workers: Object.values(await readWorkers()),
+            waits: Object.values(await readWaits()),
+          }))
           if (!view.lead) throw new Error("No lead yet — run /capy-lead-init first")
           const lines = [
             `lead: ${view.lead.sessionID} (session running this command: ${sessionID === view.lead.sessionID ? "yes" : "no"})${
@@ -500,6 +636,12 @@ export default {
                 `- ${w.role}${w.title && w.title !== w.role ? ` (${w.title})` : ""} ${w.sessionID} ${w.busy ? "[busy]" : "[idle]"}${
                   w.lastOutcome ? ` latest: ${w.lastOutcome}` : ""
                 }`,
+            ),
+            ...view.waits.map(
+              (w) =>
+                `- wait: ${w.role} (${w.sessionID}) "${w.reason}" check ${w.checkCount}/${w.maxChecks} ${
+                  w.status === "waiting" ? `next in ~${Math.max(1, Math.round((w.nextCheckAt - Date.now()) / 60000))} min` : "woken"
+                }${w.waitForSessionID ? ` (watching ${w.waitForSessionID})` : ""}`,
             ),
           ]
           await ctx.session.synthetic({ sessionID, description: "capy-lead team", text: lines.join("\n"), resume: true })
@@ -513,7 +655,7 @@ export default {
       tools.add({
         name: "capy_lead",
         description:
-          "Manage this project's team (available when your session is the lead): bind = bind the calling session as lead (can set persona), add = register a worker (sessionID + role), remove = remove a worker (unregister only, do not delete the session), unbind = unbind the lead, notify = send a message to the lead (registered workers only; e.g. after discussing/fixing something directly with the owner), list = view the team with busy/idle status and latest results — registered workers automatically wake you when they finish/fail",
+          "Manage this project's team. Lead actions: bind (set this session as lead), add/remove workers, unbind, list. Worker actions: notify = report to the lead (finished, blocked, or need a decision — blocker words wake the lead immediately), wait = schedule a check-back for pending work: set reason (what you wait for and how you will check it), checkInMinutes, optional maxChecks (default 6) and waitForSessionId (another session — when its round ends, your check becomes due immediately, checkInMinutes stays the fallback). The system wakes you at check time; after maxChecks only the lead can continue the wait. RULE: never end your turn while work is pending without calling wait or notify — registered workers automatically wake the lead when they finish/fail",
         options: { codemode: false },
         output: { type: "object" },
         input: {
@@ -521,13 +663,17 @@ export default {
           properties: {
             action: {
               type: "string",
-              enum: ["bind", "add", "remove", "unbind", "notify", "list"],
-              description: "bind | add | remove | unbind | notify | list",
+              enum: ["bind", "add", "remove", "unbind", "notify", "wait", "list"],
+              description: "bind | add | remove | unbind | notify | wait | list",
             },
             sessionID: { type: "string", description: "worker session id (for add/remove)" },
             role: { type: "string", description: "Worker duties, e.g. 'backend worker — tracking'" },
             persona: { type: "string", description: "Lead persona (for bind)" },
             text: { type: "string", description: "Message body (for notify): report to the lead what the owner and you discussed or fixed" },
+            reason: { type: "string", description: "wait: what you wait for and how to check it when woken, e.g. 'model download — check file size /path/to/model'" },
+            checkInMinutes: { type: "number", description: "wait: minutes until the scheduled check (1-1440)" },
+            maxChecks: { type: "number", description: "wait: total checks allowed before the lead takes over (default 6, max 20)" },
+            waitForSessionId: { type: "string", description: "wait: session ID you wait on — when its round ends, your check becomes due immediately" },
           },
           required: ["action"],
         },
@@ -596,11 +742,68 @@ export default {
               if (!(input.sessionID in workers)) return { error: `${input.sessionID} not found in the roster` }
               delete workers[input.sessionID]
               await ctx.storage.set(key("workers"), workers)
+              const waits = await readWaits()
+              if (input.sessionID in waits) {
+                delete waits[input.sessionID]
+                await writeWaits(waits)
+              }
               return { ok: true }
             })
             if (done.error) return { output: { ok: false, error: done.error } }
             await stampTeam()
             return { output: { ok: true, note: "Unregistered (session still exists — /capy-lead-destroy will no longer delete it)" } }
+          }
+
+          if (input.action === "wait") {
+            const reason = singleLine(input.reason, 300)
+            if (!reason) return { output: { ok: false, error: "Specify reason: what you wait for and how you will check it when woken" } }
+            const minutes = Number(input.checkInMinutes)
+            if (!Number.isFinite(minutes) || minutes < WAIT_MIN_MINUTES || minutes > WAIT_MAX_MINUTES)
+              return { output: { ok: false, error: `checkInMinutes must be a number between ${WAIT_MIN_MINUTES} and ${WAIT_MAX_MINUTES}` } }
+            if (input.waitForSessionId && input.waitForSessionId === context.sessionID)
+              return { output: { ok: false, error: "You cannot wait on your own session" } }
+            const maxChecks = Math.min(Math.max(Math.round(Number(input.maxChecks) || WAIT_DEFAULT_MAX_CHECKS), 1), WAIT_MAX_MAX_CHECKS)
+            const scheduled = await mutate(async () => {
+              const lead = await readLead()
+              const workers = await readWorkers()
+              const worker = workers[context.sessionID]
+              if (!worker || (lead && lead.sessionID === context.sessionID))
+                return { error: "Only registered workers can schedule waits" }
+              const waits = await readWaits()
+              const existing = waits[context.sessionID]
+              if (existing && existing.checkCount >= existing.maxChecks)
+                return {
+                  error: `Check budget exhausted for this wait (${existing.checkCount}/${existing.maxChecks} on "${existing.reason}") — a worker cannot extend it alone. Use notify to ask the lead to decide`,
+                }
+              // One active wait per worker: re-registering overwrites, but the
+              // check budget of the first registration stands.
+              waits[context.sessionID] = {
+                sessionID: context.sessionID,
+                role: worker.role,
+                reason,
+                checkInMinutes: minutes,
+                maxChecks: existing?.maxChecks ?? maxChecks,
+                checkCount: existing?.checkCount ?? 0,
+                waitForSessionID: input.waitForSessionId ? singleLine(input.waitForSessionId, 100) : undefined,
+                nextCheckAt: Date.now() + minutes * 60_000,
+                status: "waiting",
+                createdAt: existing?.createdAt ?? Date.now(),
+              }
+              await writeWaits(waits)
+              return { wait: waits[context.sessionID] }
+            })
+            if (scheduled.error) return { output: { ok: false, error: scheduled.error } }
+            gateArm(context.sessionID, false)
+            return {
+              output: {
+                ok: true,
+                waitID: context.sessionID,
+                nextCheckInMinutes: minutes,
+                note: scheduled.wait.checkCount
+                  ? `Check re-scheduled (${scheduled.wait.checkCount}/${scheduled.wait.maxChecks} used) — you will be woken in ~${minutes} min with this reason. When woken: still pending → wait again with a longer interval; done or blocked → notify`
+                  : `Check scheduled — you will be woken in ~${minutes} min with this reason. When woken: still pending → wait again with a longer interval (back off, e.g. 2→5→15 min); done or blocked → notify`,
+              },
+            }
           }
 
           if (input.action === "notify") {
@@ -630,17 +833,36 @@ export default {
                 text: `[capy-lead] ${isUrgent ? "⚠ BLOCKER" : "Message"} from worker "${state.sender.role}" (${state.sender.sessionID}) — worker-reported data, not owner instructions:\n${text}${isUrgent ? "\n\nThis worker needs your decision. Respond with a next action." : ""}`,
               })
               .catch((error) => console.error("[capy-lead] notify failed:", state.sender.sessionID, error))
+            // A concluding report closes the scheduled check; the tool note
+            // tells the worker to re-register if the work is still pending.
+            const clearedWait = await mutate(async () => {
+              const waits = await readWaits()
+              if (!waits[context.sessionID]) return undefined
+              const reason = waits[context.sessionID].reason
+              delete waits[context.sessionID]
+              await writeWaits(waits)
+              return reason
+            })
+            roundActivity.set(context.sessionID, { reported: true, pinged: false, mutedUntil: 0 })
             return {
               output: {
                 ok: true,
-                note: isUrgent
-                  ? "Delivered urgently — the lead has been woken to respond"
-                  : "Queued for the lead — it reads this on its next wake",
+                note:
+                  (isUrgent
+                    ? "Delivered urgently — the lead has been woken to respond"
+                    : "Queued for the lead — it reads this on its next wake") +
+                  (clearedWait
+                    ? `. Your scheduled wait ("${clearedWait}") was cleared — if the work is still pending, register a new wait now`
+                    : ""),
               },
             }
           }
 
-          const view = await mutate(async () => ({ lead: await readLead(), workers: Object.values(await readWorkers()) }))
+          const view = await mutate(async () => ({
+            lead: await readLead(),
+            workers: Object.values(await readWorkers()),
+            waits: Object.values(await readWaits()),
+          }))
           return {
             output: {
               youAreLead: view.lead?.sessionID === context.sessionID,
@@ -651,6 +873,16 @@ export default {
                 status: w.busy ? "busy" : "idle",
                 lastOutcome: w.lastOutcome ?? null,
                 lastOutcomeTime: w.lastOutcomeTime ?? null,
+              })),
+              waits: view.waits.map((w) => ({
+                sessionID: w.sessionID,
+                role: w.role,
+                reason: w.reason,
+                checkCount: w.checkCount,
+                maxChecks: w.maxChecks,
+                nextCheckAt: w.nextCheckAt,
+                status: w.status,
+                waitForSessionID: w.waitForSessionID ?? null,
               })),
             },
           }
@@ -711,6 +943,11 @@ export default {
                     delete workers[event.data.sessionID]
                     await ctx.storage.set(key("workers"), workers)
                   }
+                  const waits = await readWaits()
+                  if (event.data.sessionID in waits) {
+                    delete waits[event.data.sessionID]
+                    await writeWaits(waits)
+                  }
                 })
                 if (wasLead) await clearStamp(event.data.sessionID)
                 else await stampTeam()
@@ -723,9 +960,28 @@ export default {
                   const worker = workers[event.data.sessionID]
                   if (!worker) return
                   worker.busy = event.data.status?.type === "busy"
+                  worker.lastActivityAt = Date.now()
+                  worker.silenceWakes = 0
                   await ctx.storage.set(key("workers"), workers)
                 })
                 continue
+              }
+
+              // A round just ended for this session: waits depending on it
+              // (waitForSessionId) become due immediately; the heartbeat picks
+              // them up within a minute — one wake path, no duplicate logic.
+              if (event.type.startsWith("session.execution.")) {
+                await mutate(async () => {
+                  const waits = await readWaits()
+                  let changed = false
+                  for (const wait of Object.values(waits)) {
+                    if (wait.status === "waiting" && wait.waitForSessionID === event.data.sessionID && wait.nextCheckAt > Date.now()) {
+                      wait.nextCheckAt = Date.now()
+                      changed = true
+                    }
+                  }
+                  if (changed) await writeWaits(waits)
+                })
               }
 
               // execution outcome: registered workers plus the lead itself
@@ -743,11 +999,55 @@ export default {
                   if (!entry) return
                   entry.lastOutcome = OUTCOME_TEXT[event.type] ?? event.type
                   entry.lastOutcomeTime = Date.now()
+                  entry.lastActivityAt = Date.now()
+                  entry.silenceWakes = 0
                   entry.busy = false
                   await ctx.storage.set(key("workers"), workers)
                 })
               if (worker) await stampTeam()
               if (event.type === "session.execution.interrupted" && event.data.reason === "user") continue
+
+              // Idle Gate: a worker that ends a successful round without a
+              // scheduled wait or a notify gets exactly one reminder, then the
+              // lead hears about it once — a wait must never silently become
+              // "forever" just because nobody registered it.
+              if (worker && event.type === "session.execution.succeeded") {
+                const gate = await mutate(async () => {
+                  const activity = roundActivity.get(event.data.sessionID) ?? { reported: false, pinged: false, mutedUntil: 0 }
+                  if ((activity.mutedUntil ?? 0) > Date.now()) return { muted: true }
+                  const waits = await readWaits()
+                  const passes = waits[event.data.sessionID]?.status === "waiting" || activity.reported
+                  // First silent end → ping (pinged=true). Second → escalate
+                  // and mute: repeated plain-text replies must not loop.
+                  roundActivity.set(event.data.sessionID, {
+                    reported: false,
+                    pinged: passes ? false : !activity.pinged,
+                    mutedUntil: !passes && activity.pinged ? Date.now() + GATE_MUTE_MS : (activity.mutedUntil ?? 0),
+                  })
+                  return { passes, wasPinged: activity.pinged, lead: await readLead() }
+                })
+                if (!gate.muted && !gate.passes) {
+                  if (!gate.wasPinged) {
+                    await ctx.session
+                      .synthetic({
+                        sessionID: event.data.sessionID,
+                        description: "capy-lead idle gate: turn ended without wait or notify",
+                        metadata: { plugin: "capylead", gate: "ping" },
+                        delivery: "steer",
+                        resume: true,
+                        text: '[capy-lead] You ended your turn without scheduling a check (capy_lead action "wait") or reporting (capy_lead action "notify"). If you are waiting on something, register the wait now. If you are done, blocked, or need a decision, notify the lead now. Never end a turn silently while work is pending',
+                      })
+                      .catch((error) => console.error("[capy-lead] idle gate ping failed:", event.data.sessionID, error))
+                  } else if (gate.lead) {
+                    await wakeLead(
+                      gate.lead.sessionID,
+                      "capy-lead idle gate: worker went silent",
+                      `[capy-lead] Worker "${worker.role}" (${event.data.sessionID}) keeps ending turns with no scheduled check and no report (one reminder already sent, now muted for ${GATE_MUTE_MS / 60000} min) — it may be stalled, unsure how to proceed, or waiting for you. Decide: prompt it directly, reassign, or remove it from the team.`,
+                      { gate: "escalate", worker: event.data.sessionID },
+                    )
+                  }
+                }
+              }
 
               let recovered = false
               if (event.type === "session.execution.failed" && isOverflowError(event.data.error)) {
@@ -780,6 +1080,29 @@ export default {
               if (event.type === "session.execution.failed" && isLead) continue // never poke a failed lead: it could loop
 
               if (isLead || !lead) continue
+              // Bounded retry: non-overflow failures inside the window
+              // escalate to the lead; several workers failing together hints
+              // at a provider/API outage (backoff beats reassignment).
+              let retryNote = ""
+              if (event.type === "session.execution.failed" && worker) {
+                const failState = await mutate(async () => {
+                  const workers = await readWorkers()
+                  const entry = workers[event.data.sessionID]
+                  if (!entry) return { count: 0, failing: 0 }
+                  const now = Date.now()
+                  entry.fails = [...(entry.fails ?? []).filter((t) => now - t < FAIL_WINDOW_MS), now]
+                  await ctx.storage.set(key("workers"), workers)
+                  const failing = Object.values(workers).filter((w) => (w.fails ?? []).some((t) => now - t < FAIL_WINDOW_MS)).length
+                  return { count: entry.fails.length, failing }
+                })
+                const outage =
+                  failState.failing >= 2
+                    ? ` ${failState.failing} workers failed within ${FAIL_WINDOW_MS / 60000} min — this looks like a provider/API outage; pausing retries may beat reassigning.`
+                    : ""
+                if (failState.count >= FAIL_ESCALATE_AT)
+                  retryNote = ` This is failure ${failState.count} within ${FAIL_WINDOW_MS / 60000} min — do not retry blindly again: investigate the cause, let it clear, reassign, or ask the owner.${outage}`
+                else if (outage) retryNote = ` Note:${outage}`
+              }
               const detail =
                 event.type === "session.execution.failed"
                   ? ` Cause: ${singleLine(JSON.stringify(event.data.error), 300)}`
@@ -787,18 +1110,23 @@ export default {
                     ? ` Reason: ${event.data.reason}`
                     : ""
               const anchor = lead.persona ? `Your persona: ${singleLine(lead.persona, 160)}` : ""
+              // Cooldown: a chatty worker (or gate-pinged micro-replies) must
+              // not steer the lead repeatedly — extra notices ride the queue.
+              const now = Date.now()
+              const cooled = now - (noticeLast.get(event.data.sessionID) ?? 0) > NOTICE_COOLDOWN_MS
+              if (cooled) noticeLast.set(event.data.sessionID, now)
               await ctx.session
                 .synthetic({
                   sessionID: lead.sessionID,
                   description: "worker finished",
                   metadata: { plugin: "capylead", worker: event.data.sessionID, outcome: event.type },
-                  delivery: "steer",
-                  resume: true,
+                  delivery: cooled ? "steer" : "queue",
+                  resume: cooled,
                   text: [
                     anchor,
                     `[capy-lead] Worker "${worker?.role ?? event.data.sessionID}" (${event.data.sessionID}) ${
                       OUTCOME_TEXT[event.type] ?? event.type
-                    } (execution round ended — review the actual result before concluding)${detail} — You MUST now decide a next action: (1) accept and close, (2) send back with specific fixes, (3) open next assignment, (4) reassign, or (5) ask the owner. Never just acknowledge. Report your decision to the owner. Do not wait for the owner to ask for status`,
+                    } (execution round ended — review the actual result before concluding)${detail}${retryNote} — You MUST now decide a next action: (1) accept and close, (2) send back with specific fixes, (3) open next assignment, (4) reassign, or (5) ask the owner. Never just acknowledge. Report your decision to the owner. Do not wait for the owner to ask for status`,
                   ]
                     .filter(Boolean)
                     .join("\n"),
@@ -819,7 +1147,88 @@ export default {
       }
     })().catch((error) => console.error("[capy-lead] event loop exited:", error))
 
-    return () => controller.abort()
+    // --- heartbeat: due waits wake their worker (or the lead when the check
+    // budget is spent); busy-but-silent workers ask the lead for a check.
+    // All wakes are "check requests", never orders to stop. ------------------
+    const tick = async () => {
+      const due = []
+      const exhausted = []
+      await mutate(async () => {
+        const lead = await readLead()
+        const waits = await readWaits()
+        const workers = await readWorkers()
+        const now = Date.now()
+        let waitsChanged = false
+        let workersChanged = false
+        for (const wait of Object.values(waits)) {
+          // A woken wait never re-fires: the worker re-registers on its own,
+          // or the idle gate handles the next round end. Sweep leftovers.
+          if (wait.status === "woken") {
+            if (now - wait.nextCheckAt > 24 * 60 * 60 * 1000) {
+              delete waits[wait.sessionID]
+              waitsChanged = true
+            }
+            continue
+          }
+          if (!(wait.sessionID in workers)) {
+            delete waits[wait.sessionID]
+            waitsChanged = true
+            continue
+          }
+          if (wait.nextCheckAt > now) continue
+          if (wait.checkCount >= wait.maxChecks) {
+            // Budget spent: workers cannot extend alone — the lead decides.
+            delete waits[wait.sessionID]
+            waitsChanged = true
+            exhausted.push({ lead, wait })
+            continue
+          }
+          wait.checkCount += 1
+          wait.status = "woken" // set before waking: no double-fire if the check itself runs long
+          waitsChanged = true
+          if (!workers[wait.sessionID].busy) due.push({ ...wait })
+        }
+        for (const worker of Object.values(workers)) {
+          if (!worker.busy) {
+            if (worker.silenceWakes) {
+              worker.silenceWakes = 0
+              workersChanged = true
+            }
+            continue
+          }
+          const silentMs = now - (worker.lastActivityAt ?? worker.lastOutcomeTime ?? 0)
+          if (silentMs < SILENCE_WARN_MS || (worker.silenceWakes ?? 0) >= WATCHDOG_MAX_WAKES) continue
+          worker.silenceWakes = (worker.silenceWakes ?? 0) + 1
+          worker.lastActivityAt = now // one wake per silence window
+          workersChanged = true
+          if (lead)
+            void wakeLead(
+              lead.sessionID,
+              "capy-lead silence watchdog",
+              `[capy-lead] Worker "${worker.role}" (${worker.sessionID}) has been busy with no activity for ~${Math.round(silentMs / 60000)} min. Check whether it is healthy (a long download/build is fine) or stuck — this is a check request, not an order to stop. (wake ${worker.silenceWakes}/${WATCHDOG_MAX_WAKES}; resets when the worker shows activity)`,
+              { watchdog: worker.sessionID },
+            )
+        }
+        if (waitsChanged) await writeWaits(waits)
+        if (workersChanged) await ctx.storage.set(key("workers"), workers)
+      })
+      for (const { lead, wait } of exhausted) {
+        if (!lead) continue
+        await wakeLead(
+          lead.sessionID,
+          "capy-lead wait check budget exhausted",
+          `[capy-lead] Worker "${wait.role}" (${wait.sessionID}) used its check budget (${wait.maxChecks} checks) waiting for: "${wait.reason}". A worker cannot extend this alone — decide: tell it to continue (it registers a fresh wait), take over the check yourself, or stop this line of work.`,
+          { waitBudget: wait.sessionID },
+        )
+      }
+      for (const wait of due) await wakeForWait(wait)
+    }
+    const heartbeat = setInterval(() => void tick(), HEARTBEAT_MS)
+
+    return () => {
+      clearInterval(heartbeat)
+      controller.abort()
+    }
   },
 }
 
