@@ -332,10 +332,17 @@ export default {
           "1. Check your init prompt (if any), AGENTS.md, and .capy/team.md for an existing work-tracking rule. Adopt it only if explicitly defined there.",
           "2. If none exists and the init prompt already contains a concrete task, infer the best tracking mode silently, record it, and start the task immediately.",
           "3. Otherwise, ask the owner (in their language) to pick a tracking mode:",
-          "   - Developer: tickets in .capy/cases/ + commit discipline — full audit trail and worker handoffs",
-          "   - Utility / Research: lightweight notes in .capy/cases/ for multi-step work only — continuity without overhead",
+          "   - Developer: full tracking — every task is a ticket with acceptance criteria and an outcome (audit trail, clean worker handoffs)",
+          "   - Utility / Research: tickets only for multi-step work; single-question work stays in chat",
           "   - None: conversation and worker coordination only — zero tracking files",
-          "4. Record the chosen rule in .capy/team.md and a short tag in your persona (capy_lead bind with the full persona, or ask the owner to run /capy-set-persona). If the owner replies with a task instead of choosing, infer the mode silently and record it. When adding workers, include the active tracking rule in their role. On re-init with a new mode: move only open items, never delete old artifacts.",
+          "4. Record the rule in .capy/team.md and a short tag in your persona (capy_lead bind with the full persona, or ask the owner to run /capy-set-persona). If the owner replies with a task instead of choosing, infer the mode silently and record it. When adding workers, include their assigned ticket IDs in their role. On re-init with a new mode: move only open items, never delete old artifacts.",
+          "",
+          "Default convention for Developer/Utility (\"tickets-v1\"; AGENTS.md overrides):",
+          "- Files: .capy/tickets/t-<seq>-<slug>.md — 4-digit seq you allocate from index.md next_seq; frontmatter uid/seq/created/status",
+          "- Sections: Goal (scope + exclusions) / Acceptance / Checkpoint (rewritten snapshot: Current, Done, Next, Blocker — one short bullet each) / References / Outcome (required when closing, done or cancelled)",
+          "- index.md: one row per not-closed ticket `- t-0042 | status | title | path` (open | in-progress | blocked). Closing (done | cancelled) moves the row to archive/YYYY-MM.md by closing month; ticket files and artifacts stay in place",
+          "- team.md lists Active IDs (in-progress/blocked only) — read ticket files only on demand",
+          "- Search index and archive titles before creating a new ticket; research artifacts go to .capy/tickets/artifacts/<ticket-id>/, never into the main source tree",
         ].join("\n"),
       ]
         .filter(Boolean)
@@ -437,7 +444,7 @@ export default {
           "1. A report is not a stopping point: take the next available action in this turn. End only when no actionable work remains — work is done or stopped, or everything left awaits a dependency or the owner. Worker completions, blockers, and scheduled checks wake you automatically.",
           "2. When a worker finishes, verify the deliverable against acceptance criteria, then act now: accept and close, request fixes, assign next work, reassign, or ask the owner. Never just acknowledge.",
           "3. Serialize conflicting worker edits — parallel workers never write the same files.",
-          "4. Workspace: `.capy/tmp/` for scratch files (never /tmp; name by case or task ID) and `.capy/cases/` for shared task notes; `.capy/local/` is kept out of git. Work-tracking conventions live in `.capy/team.md`, your persona, or AGENTS.md — pass the active rule in each worker's role when adding them.",
+          "4. Workspace: `.capy/tmp/` for scratch files (never /tmp; name by ticket ID) and `.capy/tickets/` for tracked work; `.capy/local/` is kept out of git. Tracking conventions are lead-maintained documents (`.capy/team.md`, your persona, AGENTS.md) — the engine stores no tracking state and never parses ticket files; include assigned ticket IDs in each worker's role when adding them.",
           "",
           "Report to the owner when your turn ends — not after every worker completion; routine waiting checks need no report. Use exactly three lines (status: one of working | waiting | waiting-owner | done | stopped):",
           "Task [status]: <the owner's goal>",
@@ -484,7 +491,7 @@ export default {
     // --- Workspace initialization: create .capy/ structure on init ----------
     const initWorkspace = async () => {
       const capyDir = `${dir}/.capy`
-      const dirs = [capyDir, `${capyDir}/local`, `${capyDir}/tmp`, `${capyDir}/cases`, `${capyDir}/artifacts`]
+      const dirs = [capyDir, `${capyDir}/local`, `${capyDir}/tmp`, `${capyDir}/tickets`]
       for (const d of dirs) {
         await Bun.write(`${d}/.gitkeep`, "").catch(() => undefined)
       }
