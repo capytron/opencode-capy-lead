@@ -1,6 +1,6 @@
 {
   "name": "opencode-capy-lead",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "capy-lead — project-neutral lead/team system for opencode: bind any session as the project lead, register worker sessions (max 16), event-driven wake on worker finish/fail with context-overflow auto-recovery, durable worker check-backs (wait tool) with idle-gate and silence watchdog, plus a TUI team strip/tree.",
   "type": "module",
   "private": true,
