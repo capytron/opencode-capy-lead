@@ -10,18 +10,19 @@
  * here — `solid-js` and `@opentui/solid/jsx-runtime` — is written out
  * explicitly and all elements are created through jsx()/jsxs() calls.
  *
- * 1. Team strip (prompt.footer.status): `capy ▶ 2/3 ✓1 ✗0`
- * 2. Team tree: `/capy-team-view` opens an interactive panel (up/down move,
- *    return opens the selected session, escape closes; click also opens);
- *    a compact tree is appended to the sidebar.
- * 3. Attention notifications, quiet by default: worker failure and pending
- *    team questions toast + notify (desktop + sound) when unfocused; normal
- *    completion is silent.
+ * Scoping: the UI renders ONLY for the session being viewed —
+ *   - the lead session gets the full team (strip + sidebar + /capy-team-view);
+ *   - a registered worker session gets a small "capy · worker (role)" badge;
+ *   - any other session renders nothing.
+ * Attention notifications (failure, pending question) are NOT scoped to the
+ * viewed session: they fire for every team visible in this TUI, so a worker
+ * failing in team B still notifies while the user reads team A.
  *
- * All data is event-driven: roster + last outcomes come from the capyTeam
- * stamp the server plugin maintains on the lead session's metadata; busy
- * state is derived live from session status. The strip and tree render
- * nothing when the project has no team.
+ * All data is event-driven: rosters + last outcomes come from the capyTeam
+ * stamps the server plugin maintains on each lead session's metadata (a
+ * stamp is canonical only when stamp.leadID === session.id — copies that
+ * children inherit name a different id and are ignored); busy state is
+ * derived live from session status.
  */
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { jsx, jsxs } from "@opentui/solid/jsx-runtime"
@@ -38,16 +39,30 @@ const timeAgo = (time) => {
 export default {
   id: "capylead.tui",
   async setup(context) {
-    // The lead is the session whose capyTeam stamp names itself; copies
-    // inherited by children name a different id and are ignored. Sessions
-    // known to live in another project's directory are skipped so multiple
-    // capy-lead projects in one TUI cannot show each other's teams.
-    const team = createMemo(() => {
-      const directory = (context.location ?? context.data.location.default()).directory
+    // Every team whose canonical stamp exists in this TUI's session store.
+    // One project directory can host multiple leads, each with its own team.
+    const allTeams = createMemo(() => {
+      const teams = []
       for (const session of context.data.session.list()) {
-        if (session.directory !== undefined && session.directory !== directory) continue
         const stamp = session.metadata?.capyTeam
-        if (stamp && stamp.leadID === session.id) return { lead: session, workers: stamp.workers ?? [] }
+        if (stamp && stamp.leadID === session.id) teams.push({ lead: session, workers: stamp.workers ?? [] })
+      }
+      return teams
+    })
+
+    // Membership of the session the user is currently viewing.
+    const currentSessionID = createMemo(() => {
+      const route = context.ui.router.current()
+      return route?.type === "session" ? route.sessionID : undefined
+    })
+    const activeTeam = createMemo(() => {
+      const activeID = currentSessionID()
+      if (!activeID) return undefined
+      const asLead = allTeams().find((team) => team.lead.id === activeID)
+      if (asLead) return { team: asLead, role: "lead", worker: undefined }
+      for (const team of allTeams()) {
+        const worker = team.workers.find((item) => item.sessionID === activeID)
+        if (worker) return { team, role: "worker", worker }
       }
       return undefined
     })
@@ -70,53 +85,58 @@ export default {
     }
 
     const offFailed = context.data.on("session.execution.failed", (event) => {
-      const current = team()
-      if (!current || event.data.sessionID === current.lead.id) return
-      const worker = current.workers.find((item) => item.sessionID === event.data.sessionID)
-      if (!worker) return
-      attention(`Worker "${worker.role}" failed — the lead has been woken`, event.data.sessionID, "error", "error")
+      for (const team of allTeams()) {
+        if (event.data.sessionID === team.lead.id) continue
+        const worker = team.workers.find((item) => item.sessionID === event.data.sessionID)
+        if (worker) {
+          attention(`Worker "${worker.role}" failed — the lead has been woken`, event.data.sessionID, "error", "error")
+          return
+        }
+      }
     })
 
     const offForm = context.data.on("form.created", (event) => {
-      const current = team()
-      if (!current) return
-      // The real payload is { form: Info } — sessionID lives on the form
-      // object (a blind-review find: the old top-level read was always
-      // undefined, silently killing this whole feature).
+      if (allTeams().length === 0) return
+      // The payload is { form: Info } — sessionID lives on the form object.
       const id = event.data.form?.sessionID
       if (!id) return
-      if (id === current.lead.id) {
-        attention("The lead is waiting for your answer", id, "warning", "question")
-        return
+      for (const team of allTeams()) {
+        if (id === team.lead.id) {
+          attention("The lead is waiting for your answer", id, "warning", "question")
+          return
+        }
+        const worker = team.workers.find((item) => item.sessionID === id)
+        if (worker) {
+          attention(`Worker "${worker.role}" is waiting for your answer`, id, "warning", "question")
+          return
+        }
       }
-      const worker = current.workers.find((item) => item.sessionID === id)
-      if (worker) attention(`Worker "${worker.role}" is waiting for your answer`, id, "warning", "question")
     })
 
-    // ---- shared tree rows -------------------------------------------------
+    // ---- shared tree rows (lead view only) ---------------------------------
     // Rows are ordered by the roster (registration order), never re-sorted on
     // updates, so the tree does not jump around while reading it.
     const rows = createMemo(() => {
-      const current = team()
-      if (!current) return []
-      const leadStatus = context.data.session.status(current.lead.id)
+      const active = activeTeam()
+      if (!active || active.role !== "lead") return []
+      const leadStatus = context.data.session.status(active.team.lead.id)
       return [
         {
           kind: "lead",
-          sessionID: current.lead.id,
+          sessionID: active.team.lead.id,
           role: "Lead",
           running: leadStatus === "running",
           outcome: null,
           outcomeTime: null,
         },
-        ...current.workers.map((worker, index) => ({
+        ...active.team.workers.map((worker, index) => ({
           kind: "worker",
           sessionID: worker.sessionID,
           role: worker.role,
           running: context.data.session.status(worker.sessionID) === "running",
           outcome: worker.lastOutcome ?? null,
           outcomeTime: worker.lastOutcomeTime ?? null,
-          last: index === current.workers.length - 1,
+          last: index === active.team.workers.length - 1,
         })),
       ]
     })
@@ -126,19 +146,33 @@ export default {
     const timer = setInterval(() => setTick(tick() + 1), 5000)
     onCleanup(() => clearInterval(timer))
 
-    // ---- 1. strip ---------------------------------------------------------
+    // ---- 1. strip: full roster for the lead, a badge for a worker ---------
     const offStrip = context.ui.slot({
       append: "prompt.footer.status",
-      render: () => jsx(TeamStrip, { context, rows }),
+      render: () => jsx(Show, {
+        get when() { return activeTeam() !== undefined },
+        get children() {
+          return jsx(Show, {
+            get when() { return activeTeam()?.role === "worker" },
+            get fallback() { return jsx(TeamStrip, { context, rows }) },
+            get children() {
+              return jsx("text", {
+                fg: context.theme.text.muted, wrapMode: "none", flexShrink: 0,
+                get children() { return ` · capy worker (${activeTeam()?.worker?.role ?? "worker"})` },
+              })
+            },
+          })
+        },
+      }),
     })
 
-    // ---- 2a. interactive panel (/capy-team-view) --------------------------------
+    // ---- 2a. interactive panel (/capy-team-view, lead only) ---------------
     const offPanel = context.ui.slot({
       append: "session.panel",
       render: (panel) =>
         jsx(Show, {
           get when() {
-            return panel.name === "capy-lead.team"
+            return activeTeam()?.role === "lead" && panel.name === "capy-lead.team" && panel.sessionID === currentSessionID()
           },
           get children() {
             return jsx(TeamPanel, { context, panel, rows, jump, tick })
@@ -146,14 +180,23 @@ export default {
         }),
     })
 
-    // ---- 2b. compact sidebar tree ------------------------------------------
+    // ---- 2b. compact sidebar tree (lead only) ------------------------------
     const offSidebar = context.ui.slot({
       append: "sidebar.content",
-      render: () => jsx(TeamSidebar, { context, rows, jump, tick }),
+      render: () =>
+        jsx(Show, {
+          get when() {
+            return activeTeam()?.role === "lead"
+          },
+          get children() {
+            return jsx(TeamSidebar, { context, rows, jump, tick })
+          },
+        }),
     })
 
-    // ---- 2c. /capy-team-view command (palette + slash) ---------------------------
+    // ---- 2c. /capy-team-view command (palette + slash, lead only) ----------
     const openPanel = () => {
+      if (activeTeam()?.role !== "lead") return
       const route = context.ui.router.current()
       const current = context.ui.panel.current()
       if (route.type === "session" && current?.sessionID === route.sessionID && current.name === "capy-lead.team") {
@@ -161,12 +204,12 @@ export default {
         return
       }
       if (context.ui.panel.open("capy-lead.team")) return
-      context.ui.toast.show({ title: "capy-lead", message: "Open a session first, then /capy-team-view", variant: "info" })
+      context.ui.toast.show({ title: "capy-lead", message: "Open the lead session first, then /capy-team-view", variant: "info" })
     }
     context.keymap.layer(() => ({
       mode: "global",
       get enabled() {
-        return rows().length > 0
+        return activeTeam()?.role === "lead"
       },
       commands: [
         {
@@ -181,6 +224,7 @@ export default {
         },
       ],
     }))
+
     return () => {
       offFailed()
       offForm()

@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.5.0 — 2026-11-03
+
+**Breaking changes:**
+
+- `/capy-lead-destroy` now **preserves sessions** (unregister-only). The host's recursive remove cannot atomically exclude another team's descendants, so the plugin never deletes sessions. Delete sessions explicitly in OpenCode when needed.
+- Automatic child-session registration removed. Workers join a team only via explicit `capy_lead add` — ordinary subagents stay outside the roster (fixes the subagent-conflation backlog).
+- Single-lead-per-directory limit removed. Multiple independent leads coexist, each with its own team. `/capy-lead-init` never errors with "another lead exists."
+
+**Multi-team architecture:**
+
+- Versioned multi-team registry (`capy:<dir>:registry`) with load-time migration from legacy `lead`/`workers`/`waits` keys. Existing registry wins over legacy data (no zombie resurrection).
+- One session = one role in one team. Cross-team `add` rejected. Human `/capy-lead-init` promotes a worker (removes old membership atomically).
+- Team-scoped event routing: outcomes, idle gate, watchdog, and scheduled checks route to the owning team's lead only.
+- Generation/membership/revision guards on all async deliveries — a detached or reassigned worker cannot slip stale messages past an intervening await.
+
+**Human recovery:**
+
+- `/capy-team-info` from an unrelated session shows all project teams.
+- `/capy-lead-detach [leadID|all]` releases a team without deleting sessions, from any session — no need to attach to the old lead.
+
+**Wait lifecycle hardened (Astra regression findings):**
+
+- Stamp (TUI metadata) failure never blocks outcome delivery or overflow recovery.
+- Idle-gate escalation latches only on successful send; failed sends retry on the next silent round.
+- Reload resets stale busy flags so due waits proceed.
+- Moved leads have their canonical stamp cleared (no ghost teams in TUI).
+- Notify quota reserves before admission; failed deliveries refund.
+- Wait checks reserve budget before message admission (worker re-registration during wake inherits consumed checks).
+
+**Onboarding:**
+
+- Tracking mode choice (Developer / Utility / None) with mode-pure context.
+- New: leads are told to delegate long-running work as worker positions (overflow recovery, scheduled checks) and keep short lookups as subagents.
+- Shared ticket ledger rules: files are authoritative, index is rebuildable, leads reread before writing.
+
+**TUI:**
+
+- Current-route scoping: lead sees full strip/sidebar/panel; registered worker sees a badge; unrelated sessions see nothing.
+- `form.created` payload fixed (`event.data.form.sessionID` — was dead since first write).
+- Notifications (failure, pending question) cover all canonical teams in the store, not just the current one.
+
+**Configurable caps:**
+
+- `.capy/config.json` `{ "maxTeams": N, "maxWorkers": N }` — defaults 16/16.
+
+**Testing:**
+
+- 25 regression tests running the real entrypoint in an isolated host adapter. See [VERIFICATION.md](VERIFICATION.md) for coverage and limits.
+
 ## v0.4.1 — 2026-11-03
 
 Second blind 4-model review (glm-5.3, argon, kimi-k3, astra — neutral prompt, full folder including the TUI). Fixes:
