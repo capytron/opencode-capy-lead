@@ -1,6 +1,6 @@
 {
   "name": "opencode-capy-lead",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "capy-lead \u2014 multi-team lead/worker coordination for opencode: independent leads per project, explicit persistent positions with overflow recovery and scheduled check-backs, idle gate and silence watchdog, TUI team strip/tree scoped to the current session.",
   "type": "module",
   "private": true,
@@ -17,10 +17,8 @@
     "./tui": "./tui.ts",
     "./gui-experimental": "./dist/gui-experimental.cjs"
   },
-  "dependencies": {
-    "@opencode/plugin": "2.2.5"
-  },
   "devDependencies": {
+    "@opencode/plugin": "2.2.5",
     "@types/node": "22.20.5",
     "jsdom": "26.1.0",
     "solid-js": "1.9.18",

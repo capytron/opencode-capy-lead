@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.1 — 2026-11-04
+
+**Fix plugin update/install from GitHub** (broke in v0.6.0):
+
+- v0.6.0 declared `@opencode/plugin` as a runtime dependency; npm's git-dependency preparation then installed its entire tree — **273 packages / ~186 MB** — which fails on restricted or slow networks (`NpmInstallFailedError: git dep preparation failed`).
+- The Desktop host already shares `@opencode/plugin/gui*` and `solid-js` module instances with `gui-experimental` bundles (they resolve to the app's own modules), so the plugin needs **zero runtime dependencies**. `@opencode/plugin` moved to devDependencies (build-time types and vite plugin only).
+- Git installs now pull nothing beyond the plugin itself.
+
 ## v0.6.0 — 2026-11-04
 
 **Experimental Desktop team GUI** (PR #1 by @attawitcto):
