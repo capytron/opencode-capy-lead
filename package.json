@@ -1,13 +1,13 @@
 {
   "name": "opencode-capy-lead",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "capy-lead \u2014 multi-team lead/worker coordination for opencode: independent leads per project, explicit persistent positions with overflow recovery and scheduled check-backs, idle gate and silence watchdog, TUI team strip/tree scoped to the current session.",
   "type": "module",
   "private": true,
   "scripts": {
-    "pretest": "npm run build",
+    "pretest": "npm run build:gui",
     "test": "node --test test/*.test.mjs",
-    "build": "vite build",
+    "build:gui": "vite build",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test"
   },

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.2 — 2026-11-04
+
+**Fix `opencode plugin add/update` failing with "git dep preparation failed"** (still broken in v0.6.1):
+
+- Root cause: pacote (opencode's installer) runs `npm install` inside a cloned plugin repo whenever package.json declares workspaces or a script named `postinstall` / `build` / `preinstall` / `install` / `prepack` / `prepare`. Our `"build": "vite build"` script triggered it, so every branch-tracking install (clone route) tried to install the full dev toolchain on the endpoint and failed.
+- Renamed the script to `build:gui` — preparation no longer triggers and installs never run npm inside the clone.
+- Guard tests now enforce the whole policy: zero runtime dependencies, a reviewed devDependencies allowlist, lifecycle-free script names, no workspaces, entrypoint imports, and bundle `require()` targets limited to host-shared modules. 41 tests.
+- Note: installing with an explicit `#tag` follows the GitHub tarball route, which hides this failure mode — only the branch-tracking route exercises preparation. Verified both routes.
+
 ## v0.6.1 — 2026-11-04
 
 **Fix plugin update/install from GitHub** (broke in v0.6.0):
