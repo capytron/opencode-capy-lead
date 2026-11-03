@@ -1,0 +1,19 @@
+.capy-team { color: inherit; font: inherit; padding: 20px 16px; height: 100%; overflow: auto; }
+.capy-team header { margin-bottom: 16px; }
+.capy-team h2 { font: inherit; font-weight: 600; margin: 0 0 4px; }
+.capy-team p { font-size: 12px; line-height: 1.6; opacity: .7; margin: 8px 0; }
+.capy-team ul { margin: 0; padding: 0; list-style: none; }
+.capy-team li + li { margin-top: 4px; }
+.capy-team button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 10px 8px; cursor: pointer; font: inherit; }
+.capy-team button:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
+.capy-team button:focus-visible, .capy-team-badge button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.capy-team-person { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.capy-team-person strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.capy-team-person small { font-size: 11px; opacity: .65; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.capy-team-state { font-size: 11px; opacity: .75; }
+.capy-team-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .35; flex: none; }
+.capy-team-dot[data-state=running] { background: #3d9b80; opacity: 1; }
+.capy-team-dot[data-state=succeeded] { background: #3d9b80; opacity: .8; }
+.capy-team-dot[data-state=failed] { background: #d15b64; opacity: 1; }
+.capy-team-badge { font: inherit; font-size: 11px; opacity: .8; margin-inline: 8px; }
+.capy-team-badge button { color: inherit; background: transparent; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 5px; padding: 3px 7px; cursor: pointer; font: inherit; }

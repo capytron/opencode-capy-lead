@@ -24,7 +24,7 @@ async function ui() {
     Show: p => p.when ? p.children : (p.fallback ?? null), For: p => p.each.map((row, i) => p.children(row, () => i)),
     jsx, jsxs: jsx, setInterval: () => 0, clearInterval: () => {},
   })
-  const plugin = vm.runInContext((await readFile(new URL("../tui.ts", import.meta.url), "utf8")).replace(/^import .*\n/gm, "").replace("export default", "globalThis.plugin ="), sandbox)
+  const plugin = vm.runInContext((await readFile(new URL("../tui.ts", import.meta.url), "utf8")).replace(/^import .*\r?\n/gm, "").replace("export default", "globalThis.plugin ="), sandbox)
   await plugin.setup(context)
   return { sessions, toasts, handlers, select: id => { current = id; panelSession = id },
     strip: () => slots.get("prompt.footer.status")(), sidebar: () => slots.get("sidebar.content")(),

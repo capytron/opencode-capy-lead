@@ -1,3 +1,42 @@
+# Desktop GUI verification
+
+The GUI is compiled against `@opencode/plugin` 2.2.5. Run `npm ci` and
+`npm run check` (on Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`).
+The suite builds the shipped CommonJS bundle before testing it.
+
+Added tests cover canonical membership, multiple teams, moved/deleted workers,
+pagination, atomic reads, disposed scope results, and failed reads. A separate
+bundle test executes the actual generated CJS with the real Solid browser DOM
+renderer in jsdom and a mocked Desktop host: panel rendering, session navigation,
+lead command gating, worker badge, detach and event subscription cleanup.
+
+The automated suite is **not a live Electron/OpenCode Desktop test**. A separate
+owner-observed smoke test on Windows Desktop 2.2.5 (2026-11-03) confirmed that the
+local plugin loaded, the team panel opened, and a registered worker appeared and
+completed a greeting. No screenshot was retained. Native notifications,
+multi-window deduplication, host reload timing, responsive appearance and the
+remaining manual checklist still need live-host verification.
+The existing server and TUI entrypoints are unchanged; their test import stripping
+now accepts Windows CRLF. Build/test dependencies are pinned in package-lock.json.
+`npm audit` currently reports 24 moderate transitive advisories from the 2.2.5
+SDK dependency tree, with no high/critical advisories; no forced dependency
+upgrades or overrides were applied. The GUI bundle externalizes host-provided
+SDK/Solid modules rather than shipping that SDK dependency tree into the GUI.
+
+Manual acceptance on a separate test location/configuration:
+
+1. Load exactly one copy of the built plugin in global configuration.
+2. Init two independent lead sessions; register one worker for each.
+3. On each lead, open `/capy-team-view` and check only its own positions appear.
+4. Open a worker by row; check only its worker badge appears. Open an unrelated
+   session and check no team UI appears.
+5. Change worker running/outcome/wait state and verify the lead's panel updates.
+6. Detach the team; check its command, menu, panel and badge disappear.
+7. Switch directory/server, disconnect/reconnect, reload GUI and open a second
+   window; verify no stale membership, duplicate listeners or notifications.
+8. Check keyboard focus and light/dark/narrow layouts. No session is deleted by
+   any GUI action.
+
 # Multi-lead verification
 
 ## Incident

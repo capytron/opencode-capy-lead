@@ -23,7 +23,7 @@ async function fixture(seed = {}, options = {}) {
     setInterval: (fn) => { intervals.push(fn); return fn }, clearInterval: () => {},
     Bun: { file: () => ({ json: async () => ({}), exists: async () => false, text: async () => "" }), write: async () => 0, spawnSync: () => ({ stdout: "" }) },
   })
-  const plugin = vm.runInContext((await readFile(new URL("../index.ts", import.meta.url), "utf8")).replace(/^import .*\n/gm, "").replace("export default", "globalThis.plugin ="), context)
+  const plugin = vm.runInContext((await readFile(new URL("../index.ts", import.meta.url), "utf8")).replace(/^import .*\r?\n/gm, "").replace("export default", "globalThis.plugin ="), context)
   const ctx = {
     location: { directory: "/project" },
     storage: {

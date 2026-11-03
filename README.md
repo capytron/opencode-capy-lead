@@ -18,6 +18,40 @@ From a local clone (put the path in your config):
 "plugins": ["/home/you/opencode-capy-lead"]
 ```
 
+## Desktop GUI (experimental)
+
+The package now includes a separate Desktop GUI alongside the existing server and TUI.
+It targets the OpenCode **2.2.5 GUI SDK**; the API is experimental. A Windows
+Desktop 2.2.5 smoke test confirmed panel opening and visibility of a registered
+worker that completed a greeting. Broader live-host acceptance remains pending.
+
+- In an active **lead** session, run `/capy-team-view`, click the **Capy team**
+  header badge, or choose **Capy team** from the side panel's **+** menu.
+- The side panel shows the lead and explicitly registered positions, live running
+  state, last outcome and scheduled-wait reason. Click a row to open its session.
+- Registered workers get only a header badge. Unrelated or detached sessions get
+  no team UI. Multiple teams stay scoped to the selected session and server.
+- Worker failures and team questions use Desktop toast/attention APIs. System
+  notifications respect the user's settings and are deduplicated across windows.
+- This is a **side panel/tab**, not an insertion into Desktop's left session-list
+  sidebar. The GUI SDK has no equivalent to TUI `sidebar.content`.
+- Reads refresh on metadata/membership events and reconcile every 30 seconds;
+  UI refreshes never create workers, prompts or collection work.
+
+For development (Node 20.19+ or 22.12+):
+
+```sh
+npm ci
+npm run check
+```
+
+Ship the single `dist/gui-experimental.cjs` bundle in Git so GitHub installs have
+an entry ready to load without relying on install scripts. Rebuild it whenever
+GUI source changes. Keep a development clone separate from the live plugin.
+To try a finished build, replace the existing package entry with this clone's
+absolute path in **global** `opencode.json(c)`; do not load both copies. No live
+config change is performed by the tests. See `VERIFICATION.md` for limitations.
+
 ## Update
 
 ```sh
