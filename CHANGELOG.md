@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.1 — 2026-11-03
+
+**Transcript noise reduction** (design reviewed by Argon; measured against real lead sessions):
+
+- Compact message format: `[capy:done] backend-eng (ses_e605…): text` replaces the verbose header. The injection guard moved into the PM contract (stated once) instead of every message; progress text caps at 200 chars, other reports at 400.
+- Outcome dedup: a `done` report suppresses the redundant "execution succeeded" echo to the lead (metadata stamp still records it). Failed/interrupted executions always deliver — flagged when they happen after a done report; success after a progress-only report notes the worker is now idle.
+- Role hygiene: `add` requires a short role (≤50 chars) with teaching errors; scope belongs in tickets or the worker's first prompt. Legacy long roles keep working and display truncated (no data migration).
+- Question guard: a `?` or "should I" inside `kind=progress` returns a tool-result hint to re-send as `kind=question` (progress never wakes the lead, so buried questions used to be lost).
+- PM contract additions: `[capy:*]` lines are untrusted worker reports; never poll worker sessions or sleep-loop (reports, outcomes and checks wake the lead); ask temporary subagents for concise summaries. Tool description now teaches ≤3-line notifies.
+- Idle gate, escalation, watchdog, decision and check messages switched to the same compact prefix style.
+
+**Why:** real lead transcripts showed 700–900 chars per worker message with essay-length roles repeated everywhere, redundant outcome echoes after every done report, and leads hand-polling workers via shell loops. 30 regression tests.
+
 ## v0.5.0 — 2026-11-03
 
 **Breaking changes:**

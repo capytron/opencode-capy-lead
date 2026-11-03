@@ -21,7 +21,7 @@ npm test
 git diff --check
 ```
 
-The suite currently has 21 tests. It runs the real entrypoint source, not copied
+The suite currently has 30 tests. It runs the real entrypoint source, not copied
 business logic. Host storage, session admission, filesystem, timers and events
 are isolated adapters; user sessions and plugin KV are untouched.
 

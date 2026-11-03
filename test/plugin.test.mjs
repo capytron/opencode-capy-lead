@@ -98,7 +98,7 @@ test("explicit positions route reports to their own lead; temporary children sta
     f.messages.length = 0
     await f.call("w", { action: "notify", kind: "done", text: "finished" })
     await f.emit("session.execution.succeeded", "w")
-    assert.ok(f.messages.some(m => m.sessionID === "a" && m.resume))
+    assert.ok(f.messages.some(m => m.sessionID === "a"))
     assert.ok(!f.messages.some(m => m.sessionID === "b"))
   } finally { f.stop() }
 })
@@ -175,7 +175,7 @@ test("deleted lead releases the whole team; a worker cannot edit its persona", a
     await f.emit("session.deleted", "a")
     assert.equal((await f.call("w", { action: "notify", kind: "blocked", text: "help" })).ok, false)
     await f.command("b", "capy-lead-init")
-    assert.equal((await f.call("b", { action: "add", sessionID: "w" })).ok, true)
+    assert.equal((await f.call("b", { action: "add", sessionID: "w", role: "w1" })).ok, true)
   } finally { f.stop() }
 })
 
@@ -183,7 +183,7 @@ test("failed notifications release reserved quota; over-quota messages are not d
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     f.options.reject = () => true
     for (let i = 0; i < 11; i++) assert.equal((await f.call("w", { action: "notify", text: "failed admission" })).ok, false)
     f.options.reject = undefined
@@ -199,7 +199,7 @@ test("busy and retry workers do not consume due checks; failed wake stays durabl
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await f.call("w", { action: "wait", reason: "download", checkInMinutes: 1, maxChecks: 1 })
     const key = "capy:/project:registry"
     f.data.get(key).teams.a.waits.w.nextCheckAt = 0
@@ -246,7 +246,7 @@ test("failed budget escalation retains its record and retries without granting a
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await f.call("w", { action: "wait", reason: "pending", checkInMinutes: 1, maxChecks: 1 })
     const waits = () => f.data.get("capy:/project:registry").teams.a.waits
     waits().w.checkCount = 1
@@ -273,7 +273,7 @@ test("safe destroy releases membership and waits without deleting any sessions",
   const f = await fixture({}, { removeReject: true })
   try {
     await f.command("a", "capy-lead-init", "keep persona")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await f.call("w", { action: "wait", reason: "pending", checkInMinutes: 1 })
     await f.command("a", "capy-lead-destroy")
     const result = await f.call("a", { action: "list" })
@@ -289,7 +289,7 @@ test("unregistered children survive destroy; removed worker is not swept back in
   try {
     f.add("w", "a")
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await f.call("a", { action: "remove", sessionID: "w" })
     await f.command("a", "capy-lead-destroy")
     assert.ok(f.sessions.has("w"))
@@ -301,7 +301,7 @@ test("moved lead and workers are never woken by their previous project", async (
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     f.sessions.get("w").location.directory = "/elsewhere"
     f.messages.length = 0
     await f.emit("session.execution.succeeded", "w")
@@ -326,7 +326,7 @@ test("a quickly re-registering worker inherits its admitted check count", async 
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await f.call("w", { action: "wait", reason: "download", checkInMinutes: 1 })
     f.data.get("capy:/project:registry").teams.a.waits.w.nextCheckAt = Date.now() - 1
     let registration
@@ -347,7 +347,7 @@ test("an old stamp cannot finish after detach and resurrect a canonical team", a
     let entered
     const ready = new Promise(resolve => { entered = resolve })
     f.options.beforeUpdate = async () => { f.options.beforeUpdate = undefined; entered(); await new Promise(resolve => { release = resolve }) }
-    const adding = f.call("a", { action: "add", sessionID: "w" })
+    const adding = f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await ready
     const detaching = f.command("outside", "capy-lead-detach", "a")
     release()
@@ -361,10 +361,10 @@ test("stamp failure does not block outcome delivery to the lead", async () => {
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
-    // Worker reports first so the round is "reported" and the outcome
-    // notification (not the idle gate) fires on completion.
-    await f.call("w", { action: "notify", kind: "done", text: "finished" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    // Worker reports progress (not done) so the outcome notification
+    // (not the idle gate) fires on completion even while stamp fails.
+    await f.call("w", { action: "notify", kind: "progress", text: "halfway done" })
     f.messages.length = 0
     f.options.beforeUpdate = async () => { throw new Error("metadata temporarily unavailable") }
     await f.emit("session.execution.succeeded", "w")
@@ -376,7 +376,7 @@ test("idle gate escalation retries when send fails; latch only on success", asyn
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     // Round 1: silent -> gets ping
     await f.emit("session.execution.succeeded", "w")
     assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("notify")))
@@ -398,7 +398,7 @@ test("reload resets stale busy flag so due waits can proceed", async () => {
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     await f.call("w", { action: "wait", reason: "download", checkInMinutes: 1 })
     // Simulate: worker was busy when plugin process died
     const reg = f.data.get("capy:/project:registry")
@@ -422,7 +422,7 @@ test("moved lead's canonical stamp is cleared on reconcile", async () => {
   const f = await fixture()
   try {
     await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     assert.ok(f.sessions.get("a").metadata.capyTeam, "stamp exists before move")
     // Move lead to another directory
     f.sessions.get("a").location.directory = "/elsewhere"
@@ -431,5 +431,77 @@ test("moved lead's canonical stamp is cleared on reconcile", async () => {
     const reg = f.data.get("capy:/project:registry")
     assert.equal(reg.teams.a, undefined, "team must be removed from registry")
     assert.equal(f.sessions.get("a").metadata.capyTeam, undefined, "stamp must be cleared even for moved session")
+  } finally { f.stop() }
+})
+
+test("done report suppresses the redundant outcome echo", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    await f.call("w", { action: "notify", kind: "done", text: "shipped" })
+    f.messages.length = 0
+    await f.emit("session.execution.succeeded", "w")
+    await f.settle()
+    assert.ok(f.messages.every(m => m.sessionID !== "a"), "no outcome echo to the lead after a done report")
+    const reg = f.data.get("capy:/project:registry")
+    assert.equal(reg.teams.a.workers.w.lastOutcome, "succeeded", "stamp still records the outcome")
+  } finally { f.stop() }
+})
+
+test("failed execution always reaches the lead, even after a done report", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    await f.call("w", { action: "notify", kind: "done", text: "shipped" })
+    f.messages.length = 0
+    await f.emit("session.execution.failed", "w", { error: { message: "boom" } })
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("AFTER a done report")),
+      "failure after done must be delivered and flagged")
+  } finally { f.stop() }
+})
+
+test("add enforces short teaching roles", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    const long = await f.call("a", { action: "add", sessionID: "w", role: "x".repeat(60) })
+    assert.equal(long.ok, false)
+    assert.match(long.error, /Role too long/)
+    f.add("w2", "a")
+    const missing = await f.call("a", { action: "add", sessionID: "w2", role: "   " })
+    assert.equal(missing.ok, false)
+    assert.match(missing.error, /short role/)
+    const ok = await f.call("a", { action: "add", sessionID: "w", role: "backend-eng" })
+    assert.equal(ok.ok, true)
+    assert.equal(ok.ok, true)
+  } finally { f.stop() }
+})
+
+test("legacy essay roles display truncated, never break the team", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    const reg = f.data.get("capy:/project:registry")
+    reg.teams.a.workers.w = { membershipID: "m1", sessionID: "w", role: "t-0005 ORIGINAL #263 scope only; #227 integration NOT authorized by owner; mapping replay tests read-only", lastActivityAt: Date.now() }
+    f.messages.length = 0
+    await f.command("a", "capy-team-info")
+    const info = f.messages.find(m => m.sessionID === "a")
+    assert.ok(info.text.includes("…"), "long role truncated for display")
+    assert.ok(!info.text.includes("#227"), "essay tail not shown")
+    assert.equal(reg.teams.a.workers.w.role.length > 50, true, "stored role untouched")
+  } finally { f.stop() }
+})
+
+test("question buried in progress gets a hint, not silence", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const res = await f.call("w", { action: "notify", kind: "progress", text: "Found 2 edge cases. Patch now or log only?" })
+    assert.equal(res.ok, true)
+    assert.match(res.hint, /kind=question/)
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.startsWith("[capy:progress]")), "progress still delivered compactly")
   } finally { f.stop() }
 })
