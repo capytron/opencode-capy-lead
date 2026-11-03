@@ -1,0 +1,63 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { createTeamSource, teamsIn, membership, teamRows } from "../src/gui/team.mjs"
+
+const info = (id, stamp, directory = "/project") => ({ id, location: { directory }, metadata: stamp ? { capyTeam: stamp } : {} })
+const stamp = { leadID: "lead", workers: [{ sessionID: "worker", role: "Builder", lastOutcome: "succeeded", waiting: "review" }] }
+
+test("GUI ignores inherited stamps, unrelated sessions, duplicate positions and moved workers", () => {
+  const sessions = [info("lead", { ...stamp, workers: [...stamp.workers, ...stamp.workers, { sessionID: "moved", role: "Moved" }] }), info("worker", stamp), info("other"), info("moved", undefined, "/elsewhere")]
+  const teams = teamsIn(sessions, "/project")
+  assert.equal(teams.length, 1)
+  assert.equal(teams[0].workers.length, 1)
+  assert.equal(membership(teams, "worker").role, "worker")
+  assert.equal(membership(teams, "other"), undefined)
+  assert.equal(membership(teams, "moved"), undefined)
+  assert.equal(membership(teamsIn(sessions.slice(1), "/project"), "worker"), undefined)
+})
+
+test("GUI isolates multiple teams and computes live status without inferring child membership", () => {
+  const teams = teamsIn([info("lead", stamp), info("worker"), info("b", { leadID: "b", workers: [] }), info("child")], "/project")
+  assert.equal(membership(teams, "b").team.workers.length, 0)
+  assert.equal(membership(teams, "child"), undefined)
+  const rows = teamRows(membership(teams, "lead").team, id => id === "worker" ? "running" : "idle")
+  assert.equal(rows[1].running, true)
+  assert.equal(rows[1].waiting, "review")
+})
+
+test("GUI snapshot reads every page atomically", async () => {
+  const calls = [], published = []
+  const source = createTeamSource(() => ({ session: { list: async (input) => {
+    calls.push(input)
+    return input.cursor ? { data: [info("worker")], cursor: {} } : { data: [info("lead", stamp)], cursor: { next: "page2" } }
+  } } }), "/project", value => published.push(value), assert.fail)
+  await source.refresh()
+  assert.equal(calls[1].cursor, "page2")
+  assert.equal(published.length, 1)
+  assert.equal(published[0].length, 2)
+  source.dispose()
+})
+
+test("disposed GUI scopes never publish stale results or errors", async () => {
+  let resolve
+  const published = [], errors = []
+  const source = createTeamSource(() => ({ session: { list: () => new Promise(done => { resolve = done }) } }), "/project", value => published.push(value), error => errors.push(error))
+  const pending = source.refresh()
+  source.dispose()
+  resolve({ data: [info("lead", stamp)], cursor: {} })
+  await pending
+  assert.deepEqual(published, [])
+  assert.deepEqual(errors, [])
+})
+
+test("snapshot failure is surfaced and cannot publish a partial roster", async () => {
+  const published = [], errors = []
+  const source = createTeamSource(() => ({ session: { list: async (input) => {
+    if (input.cursor) throw new Error("offline")
+    return { data: [info("lead", stamp)], cursor: { next: "page2" } }
+  } } }), "/project", value => published.push(value), error => errors.push(error))
+  await source.refresh()
+  assert.deepEqual(published, [])
+  assert.equal(errors.length, 1)
+  source.dispose()
+})
