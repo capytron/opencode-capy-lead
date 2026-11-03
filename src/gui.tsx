@@ -4,6 +4,15 @@ import type { SessionInfo } from "@opencode/client"
 import { createTeamSource, membership, teamRows, teamsIn } from "./gui/team.mjs"
 import css from "./gui/team.css?inline"
 
+const timeAgo = (time: number) => {
+  if (!time) return ""
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
+  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86400)}d ago`
+}
+
 export default Plugin.define({
   setup(ctx) {
     // Key the scope by server and directory, not the currently selected lead.
@@ -13,6 +22,63 @@ export default Plugin.define({
     const teamsFor = (session: MountedSession) => teamsIn(sessionsFor(session), session.directory)
     const memberFor = (session: MountedSession) => membership(teamsFor(session), session.id)
     const panelKey = `${ctx.id}:team`
+
+    /** Flat switcher dialog: every team in this directory, navigate only. */
+    const openSwitcher = () => {
+      const session = ctx.sessions.current()
+      if (!session) return
+      ctx.dialogs.open((dialog) => <TeamSwitcher dialog={dialog} session={session} />)
+    }
+    const TeamSwitcher = (props: { dialog: { close(): void }, session: MountedSession }) => {
+      const teams = () => teamsFor(props.session)
+      const openLead = (team: ReturnType<typeof teamsFor>[number]) => {
+        if (!props.session.server.connected || !sessionsFor(props.session).some((info) => info.id === team.lead.id)) return
+        ctx.tabs.open({ server: props.session.server.id, id: team.lead.id }, { focus: true })
+        props.dialog.close()
+      }
+      const marker = (team: ReturnType<typeof teamsFor>[number]) => {
+        const own = memberFor(props.session)
+        if (!own || own.team.lead.id !== team.lead.id) return ""
+        return own.role === "lead" ? "Current team" : "Your team"
+      }
+      const secondary = (team: ReturnType<typeof teamsFor>[number]) => {
+        const running = team.workers.filter((worker) => props.session.server.data.session.status(worker.sessionID) === "running").length
+        if (running > 0) return `● ${running} running · ${team.workers.length} ${team.workers.length === 1 ? "worker" : "workers"}`
+        if (team.activity > 0) return `Active ${timeAgo(team.activity)}`
+        return team.workers.length > 0 ? `${team.workers.length} ${team.workers.length === 1 ? "worker" : "workers"}` : "No workers yet"
+      }
+      const startTeam = () => {
+        try {
+          ctx.screen.current()?.composer.insert("/capy-lead-init")
+          props.dialog.close()
+        } catch {
+          void ctx.system.copy("/capy-lead-init").catch(() => undefined)
+          ctx.toast.show({ title: "capy-lead", description: "Command copied — paste it in chat and send" })
+        }
+      }
+      return <section class="capy-switcher" role="dialog" aria-label="Capy teams">
+        <header>
+          <h2>Teams in this project ({teams().length})</h2>
+          <button type="button" onClick={() => props.dialog.close()}>Close</button>
+        </header>
+        <Show when={teams().length > 0} fallback={
+          <div class="capy-switcher-empty">
+            <p>No teams in this project yet</p>
+            <p>Start a team to delegate tasks to helpers.</p>
+            <button type="button" onClick={() => startTeam()}>Type /capy-lead-init in chat</button>
+          </div>
+        }>
+          <ul><For each={teams()}>{(team) => {
+            const title = String(team.lead.title ?? "").replace(/\s+/g, " ").trim()
+            const mark = marker(team)
+            return <li><button type="button" onClick={() => openLead(team)} title={team.lead.id}>
+              <strong>{team.name}{title && title !== team.name ? ` — ${title.slice(0, 45)}` : ""}</strong>
+              <small>{mark ? `[${mark}] · ` : ""}{secondary(team)}</small>
+            </button></li>
+          }}</For></ul>
+        </Show>
+      </section>
+    }
     const open = () => {
       const session = ctx.sessions.current()
       if (session && memberFor(session)?.role === "lead") ctx.layout.toggle(panelKey, session)
@@ -85,7 +151,7 @@ export default Plugin.define({
         const member = createMemo(() => memberFor(props.session))
         const rows = createMemo(() => member()?.role === "lead" ? teamRows(member()!.team, (id: string) => props.session.server.data.session.status(id)) : [])
         return <section class="capy-team" aria-label="Capy team">
-          <header><h2>Capy team</h2><p>{rows().filter((row) => row.running).length} running · {Math.max(0, rows().length - 1)} positions</p></header>
+          <header><h2>Capy team · {member()?.team.name ?? ""}</h2><p>{rows().filter((row) => row.running).length} running · {Math.max(0, rows().length - 1)} positions</p></header>
           <Show when={member()?.role === "lead"} fallback={<p role="status">This team is no longer active. Open a lead session to view its team.</p>}>
             <ul><For each={rows()}>{(row) => <li>
               <button type="button" onClick={() => jump(props.session, row.sessionID)} title={row.sessionID}>
@@ -99,8 +165,8 @@ export default Plugin.define({
         </section>
       },
     })
-    ctx.add(Command, (): Command => ({ id: "team.open", title: "Open capy-lead team", group: "capy-lead", section: "session",
-      slash: { name: "capy-team-view" }, enabled: !!ctx.sessions.current() && memberFor(ctx.sessions.current()!)?.role === "lead", run: open }))
+    ctx.add(Command, (): Command => ({ id: "team.open", title: "Capy: Switch team", group: "capy-lead", section: "session",
+      slash: { name: "capy-team-view" }, enabled: true, run: openSwitcher }))
     ctx.add(MenuItem, (): MenuItem | undefined => {
       const session = ctx.sessions.current()
       if (!session || memberFor(session)?.role !== "lead") return undefined
@@ -109,11 +175,22 @@ export default Plugin.define({
     })
     ctx.add(Slot, { at: "session.header", render: (input) => {
       const member = createMemo(() => memberFor(input.session))
-      return <Show when={input.active && member()}><span class="capy-team-badge">
-        <Show when={member()?.role === "lead"} fallback={`capy worker (${member()?.worker?.role ?? "worker"})`}>
-          <button type="button" onClick={() => ctx.layout.toggle(panelKey, input.session)}>Capy team · {member()?.team.workers.length ?? 0}</button>
-        </Show>
-      </span></Show>
+      const count = createMemo(() => teamsFor(input.session).length)
+      const running = createMemo(() => (member()?.team.workers ?? []).filter((worker) => input.session.server.data.session.status(worker.sessionID) === "running").length)
+      const label = createMemo(() => {
+        const own = member()
+        if (!own) return count() > 0 ? `Teams · ${count()} in project` : "Teams · 0"
+        if (own.role === "lead") return `Team lead · ${own.team.name} (${running()}/${own.team.workers.length})`
+        return `Worker · ${own.worker?.role ?? "worker"} (${own.team.name})`
+      })
+      const tooltip = createMemo(() => member()
+        ? "Open the team switcher"
+        : count() > 0 ? "Not in a team — click to switch teams" : "Click to learn how to start a team")
+      return <Show when={input.active}>
+        <span class="capy-team-badge">
+          <button type="button" class={member() ? undefined : "capy-team-muted"} onClick={() => openSwitcher()} title={tooltip()}>{label()}</button>
+        </span>
+      </Show>
     } })
   },
 })

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.0 — 2026-11-04
+
+**Multi-team visibility, team naming, and a long-content channel** (design reviewed with Astra and Argon against novice/non-dev scenarios):
+
+- **Team switcher everywhere**: `/capy-team-view` now works from any session (Desktop: click the header badge) and opens a flat switcher — every team in the directory by name, most recently active first (a forgotten team resurfaces on top), `[Current team]`/`[Your team]` markers, `● N running · M workers` / `Active 2h ago`, one action opens that team's lead session. Navigate-only: joining and membership stay engine-driven.
+- **Workspace memory in every session**: unrelated sessions now show `teams · 3 in project` (muted) instead of nothing — answers "did I already start a team?" even with every tab closed. Worker badges name their team: `Worker · Reviewer (Atlas)`. Lead strips show the team name.
+- **Team naming**: leads name their team at init (`capy_lead rename`, taught in onboarding); humans override with `/capy-team-name`. Names flow into the metadata stamp, `/capy-team-info`, strips, badges and the switcher; unnamed teams fall back to a stable `Team N` by creation order, then to a shortened session title.
+- **Empty switcher teaches the first step**: "No teams in this project yet — Start a team to delegate tasks to helpers", with a button that inserts `/capy-lead-init` into the composer (copy fallback).
+- **Long-content channel (novice + anti-overflow)**: notify text is now hard-capped (400 chars, 200 for progress) and **rejected with a teaching error** instead of silently truncated — long plans, research and consultations must go through files (tickets, `.capy/tmp`) with a short summary plus the path; contract lines now tell leads and workers to move long content through files and to have temporary subagents summarize long input.
+- Stale teams are shown honestly (`Active 2d ago` from lead session + worker outcome timestamps) without claiming abandonment. 48 tests.
+
 ## v0.6.2 — 2026-11-04
 
 **Fix `opencode plugin add/update` failing with "git dep preparation failed"** (still broken in v0.6.1):

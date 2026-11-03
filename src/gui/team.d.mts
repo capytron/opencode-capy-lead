@@ -7,7 +7,13 @@ export interface Worker {
   lastOutcomeTime?: number | null
   waiting?: string | null
 }
-export interface Team { lead: SessionInfo; workers: Worker[] }
+export interface Team {
+  lead: SessionInfo
+  workers: Worker[]
+  name: string
+  activity: number
+  created: number
+}
 export type Member = { team: Team; role: "lead"; worker?: undefined } | { team: Team; role: "worker"; worker: Worker }
 export interface Row {
   sessionID: string

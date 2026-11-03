@@ -41,13 +41,30 @@ export default {
   async setup(context) {
     // Every team whose canonical stamp exists in this TUI's session store.
     // One project directory can host multiple leads, each with its own team.
+    const firstWords = (text, max = 14) => {
+      const one = String(text ?? "").replace(/\s+/g, " ").trim()
+      return one.length > max ? one.slice(0, max - 1) + "…" : one
+    }
     const allTeams = createMemo(() => {
       const teams = []
       for (const session of context.data.session.list()) {
         const stamp = session.metadata?.capyTeam
-        if (stamp && stamp.leadID === session.id) teams.push({ lead: session, workers: stamp.workers ?? [] })
+        if (!stamp || stamp.leadID !== session.id) continue
+        const workers = stamp.workers ?? []
+        const lastOutcome = Math.max(0, ...workers.map((item) => item.lastOutcomeTime ?? 0), 0)
+        teams.push({
+          lead: session,
+          workers,
+          name: stamp.name || firstWords(session.title) || "",
+          activity: Math.max(session.time?.updated ?? 0, lastOutcome),
+          created: session.time?.created ?? 0,
+        })
       }
-      return teams
+      // Stable fallback numbering for teams with no name and no usable title.
+      const numbered = new Map([...teams].sort((a, b) => a.created - b.created).map((team, index) => [team, index + 1]))
+      for (const team of teams) if (!team.name) team.name = `Team ${numbered.get(team)}`
+      // Most recently active first: the team someone forgot about sits on top.
+      return [...teams].sort((a, b) => b.activity - a.activity)
     })
 
     // Membership of the session the user is currently viewing.
@@ -146,36 +163,39 @@ export default {
     const timer = setInterval(() => setTick(tick() + 1), 5000)
     onCleanup(() => clearInterval(timer))
 
-    // ---- 1. strip: full roster for the lead, a badge for a worker ---------
+    // ---- 1. strip: membership answers itself; the project total is the ----
+    // ---- workspace memory that survives closed tabs -----------------------
     const offStrip = context.ui.slot({
       append: "prompt.footer.status",
-      render: () => jsx(Show, {
-        get when() { return activeTeam() !== undefined },
-        get children() {
-          return jsx(Show, {
-            get when() { return activeTeam()?.role === "worker" },
-            get fallback() { return jsx(TeamStrip, { context, rows }) },
-            get children() {
-              return jsx("text", {
-                fg: context.theme.text.muted, wrapMode: "none", flexShrink: 0,
-                get children() { return ` · capy worker (${activeTeam()?.worker?.role ?? "worker"})` },
-              })
-            },
+      render: () => {
+        const active = activeTeam()
+        if (!active) {
+          const count = allTeams().length
+          return jsx("text", {
+            fg: context.theme.text.muted, wrapMode: "none", flexShrink: 0,
+            get children() { return ` · teams · ${count > 0 ? `${count} in project` : "0"}` },
           })
-        },
-      }),
+        }
+        if (active.role === "worker") {
+          return jsx("text", {
+            fg: context.theme.text.muted, wrapMode: "none", flexShrink: 0,
+            get children() { return ` · ↳ ${active.worker?.role ?? "worker"} (${active.team.name})` },
+          })
+        }
+        return jsx(TeamStrip, { context, rows, teamName: () => active.team.name })
+      },
     })
 
-    // ---- 2a. interactive panel (/capy-team-view, lead only) ---------------
+    // ---- 2a. team switcher (/capy-team-view, every session) ---------------
     const offPanel = context.ui.slot({
       append: "session.panel",
       render: (panel) =>
         jsx(Show, {
           get when() {
-            return activeTeam()?.role === "lead" && panel.name === "capy-lead.team" && panel.sessionID === currentSessionID()
+            return panel.name === "capy-lead.teams" && panel.sessionID === currentSessionID()
           },
           get children() {
-            return jsx(TeamPanel, { context, panel, rows, jump, tick })
+            return jsx(SwitcherPanel, { context, panel, allTeams, activeTeam, currentSessionID, jump, tick })
           },
         }),
     })
@@ -194,27 +214,23 @@ export default {
         }),
     })
 
-    // ---- 2c. /capy-team-view command (palette + slash, lead only) ----------
+    // ---- 2c. /capy-team-view command (palette + slash, every session) -----
     const openPanel = () => {
-      if (activeTeam()?.role !== "lead") return
       const route = context.ui.router.current()
       const current = context.ui.panel.current()
-      if (route.type === "session" && current?.sessionID === route.sessionID && current.name === "capy-lead.team") {
+      if (route.type === "session" && current?.sessionID === route.sessionID && current.name === "capy-lead.teams") {
         context.ui.panel.close()
         return
       }
-      if (context.ui.panel.open("capy-lead.team")) return
-      context.ui.toast.show({ title: "capy-lead", message: "Open the lead session first, then /capy-team-view", variant: "info" })
+      if (context.ui.panel.open("capy-lead.teams")) return
+      context.ui.toast.show({ title: "capy-lead", message: "Open a session first, then /capy-team-view", variant: "info" })
     }
     context.keymap.layer(() => ({
       mode: "global",
-      get enabled() {
-        return activeTeam()?.role === "lead"
-      },
       commands: [
         {
           id: "capylead.team.open",
-          title: "Open the capy-lead team tree",
+          title: "Capy: Switch team",
           slash: { name: "capy-team-view" },
           group: "capy-lead",
           palette: true,
@@ -270,12 +286,11 @@ function TeamStrip(props) {
           jsx("text", { fg: theme.text.muted, wrapMode: "none", flexShrink: 0, children: " · " }),
           jsx("text", {
             get fg() {
-              return leadRunning() ? theme.text.feedback.success.base : theme.text.muted
+              return leadRunning() ? theme.text.feedback.success.base : theme.text.base
             },
-            wrapMode: "none",
-            flexShrink: 0,
+            wrapMode: "none", flexShrink: 0,
             get children() {
-              return leadRunning() ? "capy ▶" : "capy"
+              return `team ${leadRunning() ? "▶" : "·"} ${props.teamName()}`
             },
           }),
           jsx("text", {
@@ -293,8 +308,7 @@ function TeamStrip(props) {
             get children() {
               return jsx("text", {
                 fg: theme.text.feedback.success.base,
-                wrapMode: "none",
-                flexShrink: 0,
+                wrapMode: "none", flexShrink: 0,
                 get children() {
                   return ` ✓${counts().done}`
                 },
@@ -308,8 +322,7 @@ function TeamStrip(props) {
             get children() {
               return jsx("text", {
                 fg: theme.text.feedback.error.base,
-                wrapMode: "none",
-                flexShrink: 0,
+                wrapMode: "none", flexShrink: 0,
                 get children() {
                   return ` ✗${counts().failed}`
                 },
@@ -322,13 +335,29 @@ function TeamStrip(props) {
   })
 }
 
-function TeamPanel(props) {
+function SwitcherPanel(props) {
   const theme = props.context.theme
   const [selected, setSelected] = createSignal(0)
-  const count = createMemo(() => props.rows().length)
+  const teams = createMemo(() => props.allTeams())
+  const count = createMemo(() => teams().length)
   const clamp = (index) => Math.min(index, Math.max(0, count() - 1))
-  const selectedRow = createMemo(() => props.rows()[clamp(selected())])
+  const selectedTeam = createMemo(() => teams()[clamp(selected())])
   const focused = createMemo(() => props.panel.focused)
+
+  // The marker answers "which team is this session in?" at a glance.
+  const marker = (team) => {
+    const active = props.activeTeam()
+    if (!active) return ""
+    if (active.team.lead.id === team.lead.id) return active.role === "lead" ? "Current team" : "Your team"
+    return ""
+  }
+  const secondary = (team) => {
+    void props.tick()
+    const running = team.workers.filter((item) => props.context.data.session.status(item.sessionID) === "running").length
+    if (running > 0) return `● ${running} running · ${team.workers.length} ${team.workers.length === 1 ? "worker" : "workers"}`
+    if (team.activity > 0) return `Active ${timeAgo(team.activity)}`
+    return team.workers.length > 0 ? `${team.workers.length} ${team.workers.length === 1 ? "worker" : "workers"}` : "No workers yet"
+  }
 
   props.context.keymap.layer(() => ({
     get enabled() {
@@ -336,7 +365,7 @@ function TeamPanel(props) {
     },
     commands: [
       {
-        id: "capylead.team.up",
+        id: "capylead.teams.up",
         title: "Move selection up",
         bind: "up",
         run: () => {
@@ -344,7 +373,7 @@ function TeamPanel(props) {
         },
       },
       {
-        id: "capylead.team.down",
+        id: "capylead.teams.down",
         title: "Move selection down",
         bind: "down",
         run: () => {
@@ -352,19 +381,19 @@ function TeamPanel(props) {
         },
       },
       {
-        id: "capylead.team.open",
-        title: "Open the selected session",
+        id: "capylead.teams.open",
+        title: "Open the team lead session",
         bind: "return",
         run: () => {
-          const row = selectedRow()
-          if (!row) return
-          props.jump(row.sessionID)
+          const team = selectedTeam()
+          if (!team) return
+          props.jump(team.lead.id)
           props.panel.close()
         },
       },
       {
-        id: "capylead.team.close",
-        title: "Close the team tree",
+        id: "capylead.teams.close",
+        title: "Close the team switcher",
         bind: "escape",
         run: () => {
           props.panel.close()
@@ -382,85 +411,80 @@ function TeamPanel(props) {
     paddingRight: 1,
     children: [
       jsxs("text", { fg: theme.text.base, flexShrink: 0, wrapMode: "none", children: [
-        jsx("b", { children: "CAPY TEAM" }),
-        jsx("span", { style: { fg: theme.text.muted }, children: " · up/down move · return open · esc close" }),
+        jsx("b", { children: "TEAMS IN THIS PROJECT" }),
+        jsx("span", { style: { fg: theme.text.muted }, children: ` (${count()})` }),
       ] }),
-      jsx("box", {
-        flexDirection: "column",
-        paddingTop: 1,
-        children: jsx(For, {
-          get each() {
-            return props.rows()
-          },
-          children: (row, index) => {
-            const outcome = createMemo(() => {
-              void props.tick()
-              return outcomeText(row, theme)
-            })
-            return jsxs("box", {
-              flexDirection: "row",
-              gap: 1,
-              onMouseUp: () => {
-                setSelected(index())
-                props.jump(row.sessionID)
-                props.panel.close()
+      jsx(Show, {
+        get when() {
+          return count() > 0
+        },
+        get fallback() {
+          return jsxs("box", { flexDirection: "column", paddingTop: 1, children: [
+            jsx("text", { fg: theme.text.base, wrapMode: "none", children: "No teams in this project yet" }),
+            jsx("text", { fg: theme.text.muted, wrapMode: "none", children: "Start a team to delegate tasks to helpers." }),
+            jsx("text", { fg: theme.text.muted, wrapMode: "none", children: "Type /capy-lead-init in chat to make this session a team lead." }),
+          ] })
+        },
+        get children() {
+          return jsx("box", {
+            flexDirection: "column",
+            paddingTop: 1,
+            children: jsx(For, {
+              get each() {
+                return teams()
               },
-              children: [
-                jsx("text", {
-                  get fg() {
-                    return index() === clamp(selected()) ? theme.text.base : theme.text.muted
+              children: (team, index) => {
+                const title = String(team.lead.title ?? "").replace(/\s+/g, " ").trim()
+                return jsxs("box", {
+                  flexDirection: "row",
+                  gap: 1,
+                  onMouseUp: () => {
+                    setSelected(index())
+                    props.jump(team.lead.id)
+                    props.panel.close()
                   },
-                  wrapMode: "none",
-                  flexShrink: 0,
-                  get children() {
-                    return index() === clamp(selected()) ? "❯" : " "
-                  },
-                }),
-                jsx("text", {
-                  get fg() {
-                    return row.kind === "lead" ? theme.text.base : theme.text.muted
-                  },
-                  wrapMode: "none",
-                  flexShrink: 0,
-                  truncate: true,
-                  minWidth: 16,
-                  maxWidth: 24,
-                  get children() {
-                    return (row.kind === "worker" ? (row.last ? "└─ " : "├─ ") : "") + row.role
-                  },
-                }),
-                jsx("text", {
-                  get fg() {
-                    return row.running ? theme.text.feedback.success.base : theme.text.muted
-                  },
-                  wrapMode: "none",
-                  flexShrink: 0,
-                  minWidth: 8,
-                  get children() {
-                    return row.running ? "running" : "idle"
-                  },
-                }),
-                jsx("text", {
-                  get fg() {
-                    return outcome().color
-                  },
-                  wrapMode: "none",
-                  truncate: true,
-                  flexGrow: 1,
-                  minWidth: 0,
-                  get children() {
-                    return outcome().text
-                  },
-                }),
-              ],
-            })
-          },
-        }),
+                  children: [
+                    jsx("text", {
+                      get fg() {
+                        return index() === clamp(selected()) ? theme.text.base : theme.text.muted
+                      },
+                      wrapMode: "none", flexShrink: 0,
+                      get children() {
+                        return index() === clamp(selected()) ? "❯" : " "
+                      },
+                    }),
+                    jsx("text", {
+                      get fg() {
+                        return marker(team) ? theme.text.base : theme.text.muted
+                      },
+                      wrapMode: "none", truncate: true, flexGrow: 1, minWidth: 0,
+                      get children() {
+                        const mark = marker(team)
+                        return `${team.name}${title && title !== team.name ? ` — ${title}` : ""}${mark ? ` [${mark}]` : ""}`
+                      },
+                    }),
+                    jsx("text", {
+                      get fg() {
+                        return team.workers.some((item) => props.context.data.session.status(item.sessionID) === "running")
+                          ? theme.text.feedback.success.base
+                          : theme.text.muted
+                      },
+                      wrapMode: "none", flexShrink: 0, truncate: true, maxWidth: 34,
+                      get children() {
+                        return secondary(team)
+                      },
+                    }),
+                  ],
+                })
+              },
+            }),
+          })
+        },
       }),
+      jsx("text", { fg: theme.text.muted, flexShrink: 0, wrapMode: "none", children: "↵ Open team lead · Esc Close" }),
     ],
   })
 }
-
 function TeamSidebar(props) {
   const theme = props.context.theme
   return jsx(Show, {

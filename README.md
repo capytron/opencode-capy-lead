@@ -61,7 +61,7 @@ opencode plugin update capytron/opencode-capy-lead
 Pin to a specific version by tag:
 
 ```sh
-opencode plugin add capytron/opencode-capy-lead#v0.6.2
+opencode plugin add capytron/opencode-capy-lead#v0.7.0
 ```
 
 Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` · `v0.6.0` · `v0.6.1` · `v0.6.2` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
@@ -75,7 +75,8 @@ Server: OpenCode 2.2+. TUI: 2.2.3+ / OpenTUI 0.8. Verification against every his
 1. Run `/capy-lead-init [persona or request]` in the session that should become a lead. Other lead sessions in the same directory do not block it. Re-init preserves its positions and waits.
 2. Ask the lead to organize suitable positions for the work. It creates sessions and explicitly registers each persistent position with `capy_lead add` and a meaningful role. Parentage alone never registers a worker.
 3. Each position can use normal temporary subagents. Their results follow the host's ordinary subagent mechanism; they do not enter the team roster or idle gate.
-4. The lead sees its team strip, sidebar and `/capy-team-view`. A registered worker sees only a worker badge. Unrelated sessions show no team UI.
+4. The lead sees its team strip, sidebar and team panel. A registered worker sees `Worker · <role> (<team name>)`. Every other session still shows the project total (`teams · 3 in project`) so nobody forgets teams exist — and `/capy-team-view` opens a **team switcher** from any session (Desktop: click the badge): every team by name, most recently active first, `[Current team]`/`[Your team]` markers, one action to open that team's lead. Projects with no teams get an empty switcher that explains how to start one.
+5. Leads name their team at init (`capy_lead rename`, e.g. `Atlas`); humans can rename anytime with `/capy-team-name <name>`. Teams without a name fall back to a stable `Team N`.
 
 One session belongs to at most one team and role. A human may promote a worker with `/capy-lead-init`; this removes its old membership and wait. Tools cannot silently take a session from another team.
 
@@ -85,10 +86,12 @@ One session belongs to at most one team and role. A human may promote a worker w
 |---|---|
 | `/capy-lead-init [text]` | Make this session a lead; preserve its existing team on re-init. |
 | `/capy-set-persona <text>` | Update the calling lead's persona only. |
+| `/capy-team-info` | Text overview of all teams (now led by team names). |
 | `/capy-team-info` | Show this session's team, or all project teams when called outside a team. |
+| `/capy-team-name` | Rename the calling lead's team: `<name>`. |
 | `/capy-lead-detach [leadID\|all]` | Release coordination without deleting sessions. From an unrelated session, specify the target shown by team-info. |
 | `/capy-lead-destroy [leadID\|all]` | Safe cleanup alias: release the target team and preserve all sessions. **No recursive session deletion.** |
-| `/capy-team-view` | Lead-only interactive team panel. |
+| `/capy-team-view` | Team switcher from any session (most recently active first; opens the team lead). |
 
 Closing a client/tab is not deleting a session. To release an old team you cannot find, use team-info and detach from a new session; attaching to the old lead is unnecessary. Deleting sessions, when desired, is an explicit host UI operation.
 

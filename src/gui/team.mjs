@@ -1,6 +1,10 @@
 /** Validate canonical metadata; inherited stamps are never membership proof. */
+const firstWords = (text, max = 14) => {
+  const one = String(text ?? "").replace(/\s+/g, " ").trim()
+  return one.length > max ? one.slice(0, max - 1) + "…" : one
+}
 export function teamsIn(sessions, directory) {
-  return sessions.flatMap((lead) => {
+  const teams = sessions.flatMap((lead) => {
     const stamp = lead.metadata?.capyTeam
     if (lead.location?.directory !== directory || !stamp || stamp.leadID !== lead.id || !Array.isArray(stamp.workers)) return []
     const seen = new Set([lead.id])
@@ -10,8 +14,18 @@ export function teamsIn(sessions, directory) {
       // A moved/deleted position must not be navigable even before reconciliation.
       return sessions.some((info) => info.id === worker.sessionID && info.location?.directory === directory)
     })
-    return [{ lead, workers }]
+    return [{
+      lead, workers,
+      name: stamp.name || firstWords(lead.title) || "",
+      activity: Math.max(lead.time?.updated ?? 0, ...workers.map((worker) => worker.lastOutcomeTime ?? 0), 0),
+      created: lead.time?.created ?? 0,
+    }]
   })
+  // Stable fallback numbering for teams with no name and no usable title,
+  // then most-recently-active first so a forgotten team resurfaces on top.
+  const byCreation = [...teams].sort((a, b) => a.created - b.created)
+  for (const team of teams) if (!team.name) team.name = `Team ${byCreation.indexOf(team) + 1}`
+  return [...teams].sort((a, b) => b.activity - a.activity)
 }
 
 export function membership(teams, sessionID) {

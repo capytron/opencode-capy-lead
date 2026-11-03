@@ -61,3 +61,19 @@ test("snapshot failure is surfaced and cannot publish a partial roster", async (
   assert.equal(errors.length, 1)
   source.dispose()
 })
+
+test("team naming uses the stamp name, stable fallbacks, and activity-first order", () => {
+  const info = (id, title, stamp, time) => ({ id, title, location: { directory: "/project" }, ...(stamp ? { metadata: { capyTeam: stamp } } : {}), time })
+  const teams = teamsIn([
+    info("old", undefined, { leadID: "old", workers: [] }, { created: 1, updated: 100 }),
+    info("named", "some tab title", { leadID: "named", name: "Atlas", workers: [] }, { created: 2, updated: 5 }),
+    info("titled", "การตรวจสอบระบบหลังบ้าน", { leadID: "titled", workers: [] }, { created: 3, updated: 50 }),
+    info("empty", undefined, { leadID: "empty", workers: [] }, { created: 4, updated: 10 }),
+  ], "/project")
+  assert.deepEqual(teams.map((team) => [team.lead.id, team.name]), [
+    ["old", "Team 1"],
+    ["titled", "การตรวจสอบระบ…"],
+    ["empty", "Team 4"],
+    ["named", "Atlas"],
+  ], "most recently active first; fallback numbering follows creation order")
+})

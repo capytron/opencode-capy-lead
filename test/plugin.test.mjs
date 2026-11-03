@@ -505,3 +505,49 @@ test("question buried in progress gets a hint, not silence", async () => {
     assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.startsWith("[capy:progress]")), "progress still delivered compactly")
   } finally { f.stop() }
 })
+
+test("team naming: lead renames itself; owner command overrides; stamp and info carry the name", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const tooLong = await f.call("a", { action: "rename", name: "x".repeat(30) })
+    assert.equal(tooLong.ok, false)
+    assert.match(tooLong.error, /24/)
+    const named = await f.call("a", { action: "rename", name: "Atlas" })
+    assert.equal(named.ok, true)
+    assert.equal(f.sessions.get("a").metadata.capyTeam.name, "Atlas")
+    const worker = await f.call("w", { action: "rename", name: "Hijack" })
+    assert.equal(worker.ok, false)
+    await f.command("a", "capy-team-name", "Beacon")
+    assert.equal(f.sessions.get("a").metadata.capyTeam.name, "Beacon")
+    f.messages.length = 0
+    await f.command("a", "capy-team-info")
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("Beacon — Lead a")), "team info leads with the team name")
+  } finally { f.stop() }
+})
+
+test("onboarding teaches the lead to name its team", async () => {
+  const f = await fixture()
+  try {
+    const messages = await f.command("a", "capy-lead-init")
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("capy_lead rename")), "naming instruction present")
+  } finally { f.stop() }
+})
+
+test("notify rejects over-long text with a teaching error instead of silent truncation", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const longDone = await f.call("w", { action: "notify", kind: "done", text: "y".repeat(401) })
+    assert.equal(longDone.ok, false)
+    assert.match(longDone.error, /401\/400/)
+    assert.match(longDone.error, /file/)
+    const longProgress = await f.call("w", { action: "notify", kind: "progress", text: "p".repeat(201) })
+    assert.equal(longProgress.ok, false)
+    assert.match(longProgress.error, /201\/200/)
+    const ok = await f.call("w", { action: "notify", kind: "done", text: "shipped; details in .capy/tickets/t-1.md" })
+    assert.equal(ok.ok, true)
+  } finally { f.stop() }
+})
