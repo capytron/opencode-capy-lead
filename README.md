@@ -61,10 +61,10 @@ opencode plugin update capytron/opencode-capy-lead
 Pin to a specific version by tag:
 
 ```sh
-opencode plugin add capytron/opencode-capy-lead#v0.5.1
+opencode plugin add capytron/opencode-capy-lead#v0.6.0
 ```
 
-Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
+Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` · `v0.6.0` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
 
 After updating, restart OpenCode (the plugin code swaps on server restart). Existing teams survive the update via versioned registry migration; `/capy-lead-init` re-runs onboarding if you want to reconfigure tracking.
 

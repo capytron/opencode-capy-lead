@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.0 — 2026-11-04
+
+**Experimental Desktop team GUI** (PR #1 by @attawitcto):
+
+- New `gui-experimental` export adds a Desktop side panel "Capy team": live worker status rows with jump-to-session, worker badge in the session header, `/capy-team-view` command, and toast/native notifications for failed workers and pending questions — always revalidating membership before acting.
+- Reads canonical `capyTeam` metadata only (directory/leadID/duplicate/existence validated, paginated atomic snapshots, disposed scopes never publish). **Engine, CLI and TUI behavior unchanged** — `index.ts` and `tui.ts` untouched.
+- Ships a prebuilt bundle for GitHub installs; verified byte-identical to a fresh source build during review.
+- Build toolchain added (vite + solid-js + jsdom, `@opencode/plugin` 2.2.5). `npm test` now builds first; local clones used with Desktop need `npm install` once.
+- Tests: 36 (30 existing + 6 GUI — the GUI tests execute the shipped bundle with real Solid rendering in jsdom).
+
 ## v0.5.1 — 2026-11-03
 
 **Transcript noise reduction** (design reviewed by Argon; measured against real lead sessions):
