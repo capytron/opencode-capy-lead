@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.1 — 2026-11-04
+
+**AGENTS.md migration hardening** (Argon review round):
+
+- **Fixed a self-blocking bug**: the section footer mentions the `disabled` marker inline, and the opt-out check ran before stripping our own section — after the first install, no future section update could ever land. The check now runs on the file *without* our managed blocks, anchored to a full-line match.
+- **Atomic write with backup**: content goes to a temp file then renames into place; the previous file is backed up first. A crash or concurrent writer can no longer corrupt the file every session loads.
+- **Half-present markers refuse to edit** (begin without end or vice versa) instead of silently appending a duplicate section; CRLF line endings handled.
+- **Deterministic legacy-duplicate stripper**: unmarked Markdown blocks that are near-verbatim copies (≥80% identical lines) of the legacy autonomy text — the raw hand-written file and the continuity plugin's old block — are removed; user-rewritten rules with their own wording survive. No LLM involved, immune to prompt injection, works headless.
+- The `opencode run` semantic-dedup idea stays deferred: with deterministic stripping the remaining cases do not justify a model call at startup (recursion, auth and cost risks documented in the review). 66 tests.
+
 ## v0.8.0 — 2026-11-04
 
 **Autonomy baseline for every session + slim team contract** (design reviewed by Astra, Argon and Kimi):

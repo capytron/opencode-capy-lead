@@ -27,6 +27,7 @@ async function fixture(seed = {}, options = {}) {
       throw Object.assign(new Error("not found"), { code: "ENOENT" })
     },
     mkdir: async () => {}, writeFile: async (path, content) => { files.set(path, content) },
+    rename: async (from, to) => { files.set(to, files.get(from) ?? ""); files.delete(from) },
     setTimeout, clearTimeout,
     setInterval: (fn) => { intervals.push(fn); return fn }, clearInterval: () => {},
     Bun: { file: () => ({ json: async () => ({}), exists: async () => false, text: async () => "" }), write: async () => 0, spawnSync: () => ({ stdout: "" }) },
@@ -752,5 +753,86 @@ test("contract v2 defers autonomy to AGENTS.md and keeps team mechanics", async 
     assert.match(event.system[0].text, /Gaps you or your workers find .* are unfinished work/)
     assert.match(event.system[0].text, /not promises to begin/)
     assert.doesNotMatch(event.system[0].text, /Ask before dependency/, "the ask-bar lives in AGENTS.md only")
+  } finally { f.stop() }
+})
+
+test("install migrates away the legacy continuity autonomy block", async () => {
+  const legacy = "# Autonomy — work until done\n\nRaw user text from before.\n\n<!-- opencode-plugin-continuity:autonomy begin (managed block — reinstall/update via install.sh) -->\n# Autonomy — work until done\n\nDuplicate from the old plugin.\n<!-- opencode-plugin-continuity:autonomy end -->\n"
+  const f = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": legacy } })
+  try {
+    const written = f.files.get("/home/tester/.config/opencode/AGENTS.md")
+    assert.ok(written.includes("Raw user text from before."), "user content preserved")
+    assert.ok(!written.includes("opencode-plugin-continuity"), "legacy block removed")
+    assert.ok(!written.includes("Duplicate from the old plugin."), "old duplicate gone")
+    assert.equal((written.match(/^<!-- capy-lead:autonomy/gm) || []).length, 1, "exactly one managed section")
+    assert.equal(f.errors.length, 0)
+  } finally { f.stop() }
+})
+
+test("the disabled check ignores its own inline mention; a tampered section still updates", async () => {
+  const once = await fixture()
+  try {
+    const written = once.files.get("/home/tester/.config/opencode/AGENTS.md")
+    assert.ok(written.includes("capy-lead:autonomy:disabled"), "footer mentions the marker inline")
+    const tampered = written.replace("## Scope discipline", "## Scope discipline\n- TAMPERED STALE LINE")
+    const again = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": tampered } })
+    try {
+      const fixed = again.files.get("/home/tester/.config/opencode/AGENTS.md")
+      assert.ok(fixed, "rewritten despite the inline disabled mention")
+      assert.ok(!fixed.includes("TAMPERED STALE LINE"), "stale line inside the section is replaced away")
+    } finally { again.stop() }
+  } finally { once.stop() }
+})
+
+test("half-present managed markers refuse to edit", async () => {
+  const f = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": "# Mine\n\n<!-- capy-lead:autonomy v1 -->\norphan begin only\n" } })
+  try {
+    assert.equal(f.files.get("/home/tester/.config/opencode/AGENTS.md"), "# Mine\n\n<!-- capy-lead:autonomy v1 -->\norphan begin only\n", "file untouched")
+    assert.ok(f.errors.some(args => args.map(String).join(" ").includes("unbalanced")), "error logged")
+  } finally { f.stop() }
+})
+
+test("CRLF files migrate cleanly", async () => {
+  const legacy = "# My rules\r\n\r\n<!-- opencode-plugin-continuity:autonomy begin (managed block — reinstall/update via install.sh) -->\r\nold text\r\n<!-- opencode-plugin-continuity:autonomy end -->\r\n"
+  const f = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": legacy } })
+  try {
+    const written = f.files.get("/home/tester/.config/opencode/AGENTS.md")
+    assert.ok(!written.includes("opencode-plugin-continuity"), "legacy block removed despite CRLF")
+    assert.ok(written.includes("# My rules"), "user content kept")
+    assert.equal((written.match(/^<!-- capy-lead:autonomy/gm) || []).length, 1)
+  } finally { f.stop() }
+})
+
+test("near-verbatim legacy autonomy text is stripped; rewritten user rules survive", async () => {
+  const legacyCopy = `# Autonomy — work until done
+
+You are a continuous coding agent. Default to finishing: work each task end-to-end without stopping to report, ask, or wait, unless genuinely blocked.
+
+## Keep working
+- Do not stop mid-task to ask questions about anything that can be undone. When something is unclear, choose the most reasonable reading, state your assumption in one line, and keep going. The user will redirect you if needed.
+- Ask first only before a true one-way door: destructive or hard-to-reverse actions (deleting data, force-pushing, publishing/releasing), or when a required credential is missing. Keep that bar high.
+- A permission prompt raised by the harness is a legitimate pause; continue immediately once it resolves.
+- After finishing one step, move directly to the next step of the task. Do not write a progress report and wait for an approval that was never requested.
+- Ending your reply without a tool call ends your turn. Before ending a turn, check: is any success criterion still unverified, any remaining step you could do right now? If yes, keep working instead of stopping.
+- Keep the user informed with brief statements of what you just did and what you are doing next — as part of working, not instead of working.
+
+## Finish before you summarize
+- A task is done only when its success criteria are met AND verified: run the checks, confirm real output. Never report assumed results as verified.
+- When the main task finishes, put yourself in the user's shoes: what would they ask next? Fix what your change broke, tie off loose ends you created, and finish obvious same-scope follow-ups before stopping.
+- Give the full report once, when the work is finished — following the project's own reporting rules if it defines any.
+
+## Scope discipline
+- Complete the task fully — don't gold-plate, but don't leave it half-done.
+- Do not expand scope beyond what was asked. Collect follow-up ideas and mention them in the final summary instead of doing them.`
+  const userRules = "## My own autonomy rules\n- Always ask me before merging to main; I like reviewing diffs myself.\n- Deploy only from the release branch after checks pass.\n"
+  const f = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": legacyCopy + "\n\n" + userRules } })
+  try {
+    const written = f.files.get("/home/tester/.config/opencode/AGENTS.md")
+    assert.ok(!written.includes("continuous coding agent"), "verbatim legacy copy removed")
+    assert.ok(!written.includes("true one-way door"), "legacy bullets removed")
+    assert.ok(written.includes("## My own autonomy rules"), "rewritten user rules survive")
+    assert.ok(written.includes("Always ask me before merging"), "user's own wording kept")
+    assert.equal((written.match(/^<!-- capy-lead:autonomy/gm) || []).length, 1)
+    assert.equal(f.errors.length, 0)
   } finally { f.stop() }
 })

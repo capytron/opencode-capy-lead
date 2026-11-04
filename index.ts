@@ -184,17 +184,82 @@ You are a continuous agent. Default to finishing: work each task end-to-end with
 Remove this section or replace it with <!-- capy-lead:autonomy:disabled --> to stop capy-lead from managing it.
 <!-- /capy-lead:autonomy -->`
 
-    // Idempotent: replaces only the marked section, preserves everything else.
+    // Near-verbatim copies of the legacy autonomy text (the pre-capy-lead
+    // global file the continuity plugin used to install) are removed
+    // deterministically: an unmarked Markdown block whose lines are >= 80%
+    // identical to a known autonomy text is a leftover duplicate, not user
+    // authorship. Rewritten rules survive; verbatim copies do not.
+    const legacyAutonomy = `# Autonomy — work until done
+
+You are a continuous coding agent. Default to finishing: work each task end-to-end without stopping to report, ask, or wait, unless genuinely blocked.
+
+## Keep working
+- Do not stop mid-task to ask questions about anything that can be undone. When something is unclear, choose the most reasonable reading, state your assumption in one line, and keep going. The user will redirect you if needed.
+- Ask first only before a true one-way door: destructive or hard-to-reverse actions (deleting data, force-pushing, publishing/releasing), or when a required credential is missing. Keep that bar high.
+- A permission prompt raised by the harness is a legitimate pause; continue immediately once it resolves.
+- After finishing one step, move directly to the next step of the task. Do not write a progress report and wait for an approval that was never requested.
+- Ending your reply without a tool call ends your turn. Before ending a turn, check: is any success criterion still unverified, any remaining step you could do right now? If yes, keep working instead of stopping.
+- Keep the user informed with brief statements of what you just did and what you are doing next — as part of working, not instead of working.
+
+## Finish before you summarize
+- A task is done only when its success criteria are met AND verified: run the checks, confirm real output. Never report assumed results as verified.
+- When the main task finishes, put yourself in the user's shoes: what would they ask next? Fix what your change broke, tie off loose ends you created, and finish obvious same-scope follow-ups before stopping.
+- Give the full report once, when the work is finished — following the project's own reporting rules if it defines any.
+
+## Scope discipline
+- Complete the task fully — don't gold-plate, but don't leave it half-done.
+- Do not expand scope beyond what was asked. Collect follow-up ideas and mention them in the final summary instead of doing them.`
+    const normalizeLine = (line) => line.trim().replace(/\s+/g, " ").toLowerCase()
+    const stripLegacyAutonomy = (text) => {
+      const reference = new Set(
+        [...autonomySection().split("\n"), ...legacyAutonomy.split("\n")]
+          .map(normalizeLine)
+          .filter((line) => line.length > 0 && !line.startsWith("<!--")),
+      )
+      const out = []
+      let block = []
+      const flush = () => {
+        const meaningful = block.map(normalizeLine).filter((line) => line.length > 0)
+        const hits = meaningful.filter((line) => reference.has(line)).length
+        if (meaningful.length >= 2 && hits >= 2 && hits / meaningful.length >= 0.8) { block = []; return }
+        out.push(...block)
+        block = []
+      }
+      for (const line of text.split("\n")) {
+        if (/^#{1,3} /.test(line)) flush()
+        block.push(line)
+      }
+      flush()
+      return out.join("\n")
+    }
+    const stripManaged = (text) => text
+      // Migrate machines where the continuity plugin used to manage the same
+      // topic: remove its legacy block so autonomy loads exactly once.
+      .replace(/^<!-- opencode-plugin-continuity:autonomy begin[^>]*-->\r?\n?[\s\S]*?^<!-- opencode-plugin-continuity:autonomy end -->\r?\n?/gm, "")
+      .replace(/^<!-- capy-lead:autonomy v\d+ -->\r?\n?[\s\S]*?^<!-- \/capy-lead:autonomy -->\r?\n?/gm, "")
     const installAutonomy = async () => {
       if (process.env.CAPY_LEAD_SKIP_AGENTS) return
       const file = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "opencode", "AGENTS.md")
       const existing = await readFile(file, "utf8").catch(() => "")
-      if (/<!--\s*capy-lead:autonomy:disabled\s*-->/.test(existing)) return
-      const stripped = existing.replace(/^<!-- capy-lead:autonomy v\d+ -->[\s\S]*?^<!-- \/capy-lead:autonomy -->\n?/gm, "").replace(/\s+$/, "")
+      // Refuse to touch half-managed files: appending onto a broken marker pair
+      // would silently duplicate the section.
+      const begins = (existing.match(/^<!-- (?:capy-lead:autonomy v\d+|opencode-plugin-continuity:autonomy begin)/gm) ?? []).length
+      const ends = (existing.match(/^<!-- (?:\/capy-lead:autonomy|opencode-plugin-continuity:autonomy end) -->/gm) ?? []).length
+      if (begins !== ends) throw new Error(`AGENTS.md has unbalanced managed markers (${begins} begin / ${ends} end); fix manually`)
+      const withoutManaged = stripManaged(existing)
+      // Opt-out marker — tested on the file WITHOUT our own section, whose
+      // footer text mentions the marker inline.
+      if (/^\s*<!--\s*capy-lead:autonomy:disabled\s*-->\s*$/m.test(withoutManaged)) return
+      const stripped = stripLegacyAutonomy(withoutManaged).replace(/\s+$/, "")
       const next = (stripped ? stripped + "\n\n" : "") + autonomySection() + "\n"
       if (next === existing) return
+      // Backup, then write atomically: a crash mid-write must never corrupt
+      // the file every session on this machine loads.
+      if (existing) await writeFile(`${file}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`, existing)
+      const tmp = `${file}.tmp-${process.pid}`
       await mkdir(join(file, ".."), { recursive: true })
-      await writeFile(file, next)
+      await writeFile(tmp, next)
+      await rename(tmp, file)
     }
 
     const bind = async (id, persona, human) => {
