@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.0 — 2026-11-05
+
+**Fixes from the dc-infra field report** (screenshot session where `list` failed repeatedly and `add` was rejected):
+
+- **Schema tolerance**: the tool's input schema no longer carries enum/range constraints (only `action` stays an enum). A model passing junk fields alongside an action (e.g. a bad `kind` with `action:"list"`) used to be rejected by host-side validation before the code ran — surfacing as a mysterious ×. Values are validated in code with teaching errors exactly where they matter.
+- **Subagents cannot bind themselves into ghost leads**: `bind` from a spawned session (has a parentID) is rejected with a teaching error; the human `/capy-lead-init` can still promote any session. This was the likely source of "Session already belongs to another team or is a lead" — a subagent reading "bind yourself" self-promoted, then the real lead's `add` correctly bounced off the one-session-one-team guard.
+- **Conflict errors are actionable now**: they name the holding team and the exact release command (`/capy-lead-detach <leadID>`).
+- **Malformed registry records no longer crash every action**: `role()`, the roster context hook, `summary`, stamping and heal tolerate a missing `workers`/`waits` map (reproduced: `Cannot read properties of undefined` from `team.workers[id]` broke `list`, `notify` and every other action in the directory). 73 tests.
+
+
 ## v0.8.3 — 2026-11-04
 
 **Hotfix: shipping bug both raw reviews caught independently + binding gate** (Astra & Argon open review):

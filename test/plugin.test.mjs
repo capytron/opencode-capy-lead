@@ -838,3 +838,59 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
     assert.equal(f.errors.length, 0)
   } finally { f.stop() }
 })
+
+test("spawned subagents cannot bind themselves into ghost leads", async () => {
+  const f = await fixture()
+  try {
+    f.add("spawned", "a")
+    const res = await f.call("spawned", { action: "bind", persona: "ghost" })
+    assert.equal(res.ok, false)
+    assert.match(res.error, /Spawned subagents cannot bind/)
+    assert.equal(f.data.get("capy:/project:registry").teams.spawned, undefined, "no ghost team created")
+    const human = await f.command("spawned", "capy-lead-init")
+    assert.ok(f.data.get("capy:/project:registry").teams.spawned, "the human command can still promote a child session")
+  } finally { f.stop() }
+})
+
+test("add conflicts name the holder and the release command", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.command("b", "capy-lead-init")
+    await f.call("b", { action: "rename", name: "Beacon" })
+    const asLead = await f.call("a", { action: "add", sessionID: "b", role: "w1" })
+    assert.equal(asLead.ok, false)
+    assert.match(asLead.error, /capy-lead-detach b/)
+    f.add("w", "b")
+    await f.call("b", { action: "add", sessionID: "w", role: "w1" })
+    const taken = await f.call("a", { action: "add", sessionID: "w", role: "w2" })
+    assert.equal(taken.ok, false)
+    assert.match(taken.error, /Beacon \(b\)/)
+  } finally { f.stop() }
+})
+
+test("junk fields alongside an action never block the call (schema tolerance)", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const res = await f.call("a", { action: "list", kind: "bogus", checkInMinutes: 0, maxChecks: 999, sessionID: "whatever" })
+    assert.equal(res.ok, true, "unknown/invalid extra fields are ignored for actions that do not use them")
+    const notify = await f.call("w", { action: "notify", kind: "not-a-kind", text: "hi" })
+    assert.equal(notify.ok, false)
+    assert.match(notify.error, /Invalid notify kind/, "kind is still validated in code where it matters")
+  } finally { f.stop() }
+})
+
+test("team-info survives a malformed team record", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    const reg = f.data.get("capy:/project:registry")
+    reg.teams.broken = { sessionID: "broken", generation: "g", status: "active", persona: "no workers field" }
+    f.data.set("capy:/project:registry", reg)
+    f.messages.length = 0
+    await f.command("x", "capy-team-info")
+    assert.ok(f.messages.some(m => m.sessionID === "x" && m.text.includes("broken")), "summary renders despite missing workers map")
+  } finally { f.stop() }
+})
