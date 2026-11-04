@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.1 — 2026-11-05
+
+**Astra "what else is broken" round — all seven confirmed findings fixed** (80 tests):
+
+- **Malformed-registry tolerance now covers every engine path**: `load()` normalizes a missing `teams` map, `heal()` normalizes `workers`/`waits` and drops null teams, and `role()` plus the tick/detach/handler/stamp paths survive null teams and missing maps — a corrupted record no longer kills the heartbeat or a healthy team's outcome delivery (reproduced via a probe: `Cannot read properties of null`).
+- **The progress quota no longer blocks urgent reports**: blocked/question/done always get through; only `progress` counts toward the 10/hour budget (a worker hitting a real blocker after ten updates still wakes its lead).
+- **Overflow escalation latches only on successful delivery** — the last remaining latch-before-send instance.
+- **A failed outcome send no longer spends the 60s wake cooldown**: the cooldown is set only when a wake actually landed, so a failed first delivery never silences the next failure.
+- **Boot heal now stamps removed leads**: a lead that moved away while the plugin was down loses its ghost `capyTeam` metadata on reload, not just on the next heartbeat.
+- **Question/blocked stay visible**: `lastOutcome` records the ask, a succeeded execution right after it no longer flips the team view to "Done" (TUI shows ❓/⚠, Desktop "Asked"/"Blocked"); `done`/`progress` correctly end the ask.
+- **Stale notify after a re-add can no longer mark the new membership as reported** (post-send bookkeeping now checks full ownership, not just team generation), and a schema self-check test locks the tolerant input shape itself.
+
+
 ## v0.9.0 — 2026-11-05
 
 **Fixes from the dc-infra field report** (screenshot session where `list` failed repeatedly and `add` was rejected):

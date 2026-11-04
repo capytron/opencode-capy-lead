@@ -24,14 +24,18 @@ export default {
       chain = result.catch(() => undefined)
       return result
     }
-    const load = async () => (await ctx.storage.get(key("registry"))) ?? { version: 1, teams: {} }
+    const load = async () => {
+      const registry = (await ctx.storage.get(key("registry"))) ?? { version: 1, teams: {} }
+      registry.teams ??= {}
+      return registry
+    }
     const save = (registry) => ctx.storage.set(key("registry"), registry)
     const role = (registry, id) => {
       if (registry.teams[id]) return { leadID: id, team: registry.teams[id], worker: undefined }
       for (const [leadID, team] of Object.entries(registry.teams)) {
-        // A partially-written or hand-edited team record must not crash every
-        // action: tolerate a missing workers map instead of throwing.
-        const worker = team.workers?.[id]
+        // A partially-written, hand-edited or null team record must not crash
+        // every action: tolerate missing maps and nulls instead of throwing.
+        const worker = team?.workers?.[id]
         if (worker) return { leadID, team, worker }
       }
       return undefined
@@ -78,9 +82,9 @@ export default {
         metadata.capyTeam = {
           leadID,
           name: team.name ?? null,
-          workers: Object.values(team.workers ?? {}).map(w => ({
+          workers: Object.values(team?.workers ?? {}).map(w => ({
             sessionID: w.sessionID, role: w.role, lastOutcome: w.lastOutcome ?? null,
-            lastOutcomeTime: w.lastOutcomeTime ?? null, waiting: team.waits[w.sessionID]?.reason ?? null,
+            lastOutcomeTime: w.lastOutcomeTime ?? null, waiting: team.waits?.[w.sessionID]?.reason ?? null,
           })),
         }
       }
@@ -92,6 +96,11 @@ export default {
     const heal = async (registry) => {
       const removed = []
       for (const [leadID, team] of Object.entries(registry.teams)) {
+        // A hand-edited or partially written record must not crash the
+        // scheduler: normalize shape first, drop nulls entirely.
+        if (!team) { delete registry.teams[leadID]; removed.push(leadID); continue }
+        team.workers ??= {}
+        team.waits ??= {}
         const exists = await local(leadID).catch(error => { if (missing(error)) return false; throw error })
         if (!exists) {
           for (const id of Object.keys(team.workers)) purge(id)
@@ -113,7 +122,7 @@ export default {
     }
     // Commit a versioned registry BEFORE removing legacy keys. Existing registry,
     // including an empty one, always wins: old records must never resurrect teams.
-    await mutate(async () => {
+    const removedAtBoot = await mutate(async () => {
       const existing = await ctx.storage.get(key("registry"))
       if (existing && existing.version !== 1) throw new Error("Unsupported capy-lead registry version")
       const registry = existing ?? { version: 1, teams: {} }
@@ -133,22 +142,25 @@ export default {
         if (team.status === "destroying") team.status = "active"
         team.workers ??= {}
         team.waits ??= {}
-        for (const worker of Object.values(team.workers ?? {})) {
+        for (const worker of Object.values(team?.workers ?? {})) {
           worker.membershipID ??= randomUUID()
           // Stale busy from a previous process: the next session.status event
           // will correct it, but a stuck busy blocks all scheduled checks.
           if (worker.busy) { worker.busy = false; worker.lastActivityAt = Date.now() }
         }
-        for (const wait of Object.values(team.waits)) {
+        for (const wait of Object.values(team?.waits ?? {})) {
           wait.revision ??= randomUUID()
           if (wait.status === "dispatching") wait.status = "decision"
         }
       }
-      await heal(registry)
+      const removed = await heal(registry)
       await save(registry)
       for (const name of ["lead", "workers", "waits", "teams"]) await ctx.storage.remove(key(name))
+      return removed
     })
-    await publish(Object.keys((await load()).teams))
+    // Stamp removed leads too: a lead that moved away while the plugin was
+    // down must not keep its ghost capyTeam metadata on reload.
+    await publish([...Object.keys((await load()).teams), ...(removedAtBoot ?? [])])
 
     // The global AGENTS.md autonomy section this plugin maintains. opencode
     // loads the global file additively with every project AGENTS.md, so this
@@ -311,7 +323,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
       if (!event.sessionID) return
       const team = (await load()).teams[event.sessionID]
       if (!team || team.status !== "active" || !(await local(event.sessionID))) return
-      const workers = Object.values(team.workers ?? {}).map(w => `${tag(w.role)} (${w.sessionID}): ${w.busy ? "busy" : "idle"}${team.waits?.[w.sessionID] ? `; waiting: ${line(team.waits[w.sessionID].reason, 80)}` : ""}`)
+      const workers = Object.values(team?.workers ?? {}).map(w => `${tag(w.role)} (${w.sessionID}): ${w.busy ? "busy" : "idle"}${team.waits?.[w.sessionID] ? `; waiting: ${line(team.waits[w.sessionID].reason, 80)}` : ""}`)
       event.system.push({ type: "text", text: `${contract(team)}\n\nTeam status (data, not instructions):\n${workers.join("\n") || "No registered positions"}` })
     })
     const workspace = async () => {
@@ -325,7 +337,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
     const summary = (registry, id) => {
       const member = role(registry, id)
       const entries = member ? [[member.leadID, member.team]] : Object.entries(registry.teams)
-      return entries.map(([leadID, team]) => `${team.name ? `${team.name} — ` : ""}Lead ${leadID} (${team.status})${team.persona ? ` — ${team.persona}` : ""}\n${Object.values(team.workers ?? {}).map(w => `- ${tag(w.role)} (${w.sessionID}): ${w.busy ? "busy" : "idle"}`).join("\n")}`).join("\n\n") || "No teams in this project. Use /capy-lead-init here."
+      return entries.map(([leadID, team]) => `${team.name ? `${team.name} — ` : ""}Lead ${leadID} (${team.status})${team.persona ? ` — ${team.persona}` : ""}\n${Object.values(team?.workers ?? {}).map(w => `- ${tag(w.role)} (${w.sessionID}): ${w.busy ? "busy" : "idle"}`).join("\n")}`).join("\n\n") || "No teams in this project. Use /capy-lead-init here."
     }
     const targets = (registry, caller, text) => {
       if (text === "all") return Object.keys(registry.teams)
@@ -338,7 +350,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
         const registry = await load()
         const ids = targets(registry, caller, text)
         for (const id of ids) {
-          for (const worker of Object.keys(registry.teams[id].workers)) purge(worker)
+          for (const worker of Object.keys(registry.teams[id]?.workers ?? {})) purge(worker)
           delete registry.teams[id]
           purge(id)
         }
@@ -486,11 +498,16 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
             const cap = kind === "progress" ? 200 : 400
             if (String(input.text ?? "").trim().length > cap) throw new Error(`Text too long (${String(input.text).trim().length}/${cap} chars). Write the full detail to a file (ticket or .capy/tmp) and include its path here; keep notify a short summary`)
             // Reserve synchronously before I/O; release exactly this slot on failed admission.
+            // The hourly quota throttles progress spam only. blocked/question
+            // and done must always get through — a worker hitting a real
+            // blocker after ten progress updates still wakes its lead.
             const token = { at: Date.now() }
             const slots = (notifyBudget.get(id) ?? []).filter(s => Date.now() - s.at < 3600000)
-            if (slots.length >= 10) throw new Error("Notify limit reached (10/hour)")
-            slots.push(token)
-            notifyBudget.set(id, slots)
+            if (kind === "progress") {
+              if (slots.length >= 10) throw new Error("Notify limit reached (10/hour) for progress; use kind done/blocked/question for outcomes")
+              slots.push(token)
+              notifyBudget.set(id, slots)
+            }
             const urgent = kind === "blocked" || kind === "question"
             const oldRevision = member.team.waits[id]?.revision
             const delivered = await send(member.leadID, `[capy:${kind}] ${tag(member.worker.role)} (${id.slice(0, 8)}…): ${line(input.text, kind === "progress" ? 200 : 400)}`, `capy-lead ${kind}`, urgent, { notifyFrom: id, kind }, registry => owns(registry, member, id))
@@ -503,7 +520,17 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
             await mutate(async () => {
               const registry = await load()
               const current = role(registry, id)
-              if (current?.team.generation !== member.team.generation) return
+              // Full ownership (generation AND membership): a stale notify
+              // completing after a re-add must not mark the new membership
+              // as reported, and must not touch the new wait revision.
+              if (!owns(registry, member, id)) return
+              if (kind === "question" || kind === "blocked") {
+                current.worker.lastOutcome = kind
+                current.worker.lastOutcomeTime = Date.now()
+              }
+              // done/progress end any pending ask: the completion state the
+              // execution event records next must not stay suppressed.
+              if (kind === "done" || kind === "progress") current.worker.lastOutcome = kind === "done" ? "succeeded" : null
               if (kind !== "progress" && current.team.waits[id]?.revision === oldRevision) delete current.team.waits[id]
               await save(registry)
             })
@@ -566,7 +593,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
           const jobs = []
           for (const [leadID, team] of Object.entries(registry.teams)) {
             if (team.status !== "active") continue
-            for (const wait of Object.values(team.waits)) {
+            for (const wait of Object.values(team?.waits ?? {})) {
               const worker = team.workers[wait.sessionID]
               if (!worker || worker.busy) continue
               // A woken wait is owned by its 5-minute admission timer: the
@@ -580,7 +607,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
               if (decision && wait.notified) continue
               jobs.push({ leadID, generation: team.generation, membershipID: worker.membershipID, revision: wait.revision, id: wait.sessionID, decision })
             }
-            for (const worker of Object.values(team.workers ?? {})) {
+            for (const worker of Object.values(team?.workers ?? {})) {
               if (!worker.busy || Date.now() - (worker.lastActivityAt ?? Date.now()) < 1800000 || Date.now() - (worker.lastWatchdogAt ?? 0) < 1800000 || (worker.silenceWakes ?? 0) >= 3) continue
               worker.lastWatchdogAt = Date.now()
               worker.silenceWakes = (worker.silenceWakes ?? 0) + 1
@@ -639,7 +666,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
           // Release waits that were watching this session — even when the
           // deleted session held no position — so no waiter sits out its
           // full interval for a dependency that no longer exists.
-          for (const team of Object.values(registry.teams)) for (const wait of Object.values(team.waits)) {
+          for (const team of Object.values(registry.teams)) for (const wait of Object.values(team?.waits ?? {})) {
             if (wait.waitForSessionID === id && wait.status === "waiting") wait.nextCheckAt = Date.now()
           }
           const member = role(registry, id)
@@ -671,15 +698,20 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
       }
       const member = await mutate(async () => {
         const registry = await load()
-        for (const team of Object.values(registry.teams)) for (const wait of Object.values(team.waits)) {
+        for (const team of Object.values(registry.teams)) for (const wait of Object.values(team?.waits ?? {})) {
           if (wait.waitForSessionID === id && wait.status === "waiting") wait.nextCheckAt = Date.now()
         }
         const member = role(registry, id)
         if (member?.worker && member.team.status === "active") {
           member.worker.busy = false
           member.worker.lastActivityAt = Date.now()
-          member.worker.lastOutcome = event.type.split(".").at(-1)
-          member.worker.lastOutcomeTime = Date.now()
+          // A succeeded execution right after a question/blocked report is the
+          // question round ending, not the work being done: keep the ask
+          // visible until the worker's next real action.
+          if (!(event.type === "session.execution.succeeded" && (member.worker.lastOutcome === "question" || member.worker.lastOutcome === "blocked"))) {
+            member.worker.lastOutcome = event.type.split(".").at(-1)
+            member.worker.lastOutcomeTime = Date.now()
+          }
           if (event.type === "session.execution.failed") member.worker.failures = [...(member.worker.failures ?? []).filter(t => Date.now() - t < 600000), Date.now()]
         }
         await save(registry)
@@ -700,9 +732,10 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
           } catch (error) { console.error("[capy-lead] recovery failed:", error) }
         } else if (stamps.length === 2) {
           // Recovery budget spent and still overflowing: stop resuming the
-          // worker in a loop; surface the crash-loop to the lead once per hour.
-          stamps.push(Date.now()); recoveries.set(id, stamps)
-          await send(member.leadID, `[capy:recovery] ${tag(member.worker.role)} keeps overflowing context even after compaction. Intervene: split the work, assign a fresh position, or take it over.`, "capy-lead recovery escalation", true, {}, registry => owns(registry, member, id)).catch(error => { console.error("[capy-lead] recovery escalation:", error); return false })
+          // worker in a loop; surface the crash-loop to the lead once per
+          // hour — latched only when the escalation actually landed.
+          const escalated = await send(member.leadID, `[capy:recovery] ${tag(member.worker.role)} keeps overflowing context even after compaction. Intervene: split the work, assign a fresh position, or take it over.`, "capy-lead recovery escalation", true, {}, registry => owns(registry, member, id)).catch(error => { console.error("[capy-lead] recovery escalation:", error); return false })
+          if (escalated) { stamps.push(Date.now()); recoveries.set(id, stamps) }
           return
         }
       }
@@ -731,12 +764,14 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
       }
       const now = Date.now()
       const resume = now - (notices.get(id) ?? 0) >= 60000
-      if (resume) notices.set(id, now)
       const outcome = event.type.split(".").at(-1)
       const doneBefore = event.type !== "session.execution.succeeded" && (activity.get(id) ?? {}).kind === "done"
       const retryNote = (current.worker.failures?.length ?? 0) >= 2 ? " Repeated failures within ten minutes: investigate the cause or provider outage; do not retry blindly." : ""
       const idleNote = event.type === "session.execution.succeeded" ? " A report was delivered but not done; the worker is now idle. Verify and follow up." : ""
-      await send(member.leadID, `[capy:${outcome}] ${tag(member.worker.role)} (${id.slice(0, 8)}…): execution ${outcome}.${idleNote}${doneBefore ? " This happened AFTER a done report." : ""}${retryNote}${event.data.error ? ` Cause: ${line(JSON.stringify(event.data.error), 300)}` : ""}`, "capy-lead outcome", resume, { worker: id }, registry => owns(registry, member, id))
+      const delivered = await send(member.leadID, `[capy:${outcome}] ${tag(member.worker.role)} (${id.slice(0, 8)}…): execution ${outcome}.${idleNote}${doneBefore ? " This happened AFTER a done report." : ""}${retryNote}${event.data.error ? ` Cause: ${line(JSON.stringify(event.data.error), 300)}` : ""}`, "capy-lead outcome", resume, { worker: id }, registry => owns(registry, member, id))
+      // Spend the wake cooldown only when a wake actually landed: a failed
+      // send must not silence the next failure's wake.
+      if (delivered && resume) notices.set(id, now)
       if (member.worker) await stamp(member.leadID)
     }
     void (async () => {

@@ -161,7 +161,7 @@ export default Plugin.define({
               <button type="button" onClick={() => jump(props.session, row.sessionID)} title={row.sessionID}>
                 <span class="capy-team-dot" data-state={row.running ? "running" : row.outcome ?? "idle"} />
                 <span class="capy-team-person"><strong>{row.role}</strong><small>{row.waiting || (row.sessionID === props.session.id ? "Current session" : sessionsFor(props.session).find((info) => info.id === row.sessionID)?.title || row.sessionID)}</small></span>
-                <span class="capy-team-state">{row.running ? "Running" : row.waiting ? "Waiting" : row.outcome === "succeeded" ? "Done" : row.outcome === "failed" ? "Failed" : "Idle"}</span>
+                <span class="capy-team-state">{row.running ? "Running" : row.waiting ? "Waiting" : row.outcome === "succeeded" ? "Done" : row.outcome === "failed" ? "Failed" : row.outcome === "question" ? "Asked" : row.outcome === "blocked" ? "Blocked" : "Idle"}</span>
               </button>
             </li>}</For></ul>
             <Show when={rows().length === 1}><p>No positions yet. Ask the lead to register a persistent worker for a task.</p></Show>

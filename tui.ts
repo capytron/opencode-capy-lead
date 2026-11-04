@@ -254,6 +254,8 @@ export default {
 
 function outcomeText(row, theme) {
   if (row.waiting) return { text: `⏳ ${row.waiting}`.trim(), color: theme.text.muted }
+  if (row.outcome === "question") return { text: `❓ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.muted }
+  if (row.outcome === "blocked") return { text: `⚠ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.error.base }
   if (row.outcome === "succeeded")
     return { text: `✓ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.success.base }
   if (row.outcome === "failed")

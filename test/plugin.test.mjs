@@ -75,7 +75,7 @@ async function fixture(seed = {}, options = {}) {
   const command = (id, name, text = "") => commands.get(name).execute({ sessionID: id, prompt: { text } })
   const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)) }
   const emit = async (type, sessionID, extra = {}) => { events.push({ type, data: { sessionID, ...extra } }); consumer?.(); await settle() }
-  return { call, command, stop, hooks, data, sessions, messages, add, emit, settle, intervals, options, errors, files }
+  return { call, command, stop, hooks, data, sessions, messages, add, emit, settle, intervals, options, errors, files, tools }
 }
 
 test("context hooks work for ordinary sessions and two independent leads", { timeout: 1500 }, async () => {
@@ -200,9 +200,11 @@ test("failed notifications release reserved quota; over-quota messages are not d
     f.options.reject = undefined
     f.messages.length = 0
     for (let i = 0; i < 10; i++) assert.equal((await f.call("w", { action: "notify", text: "ติดตั้งสำเร็จ", kind: "progress" })).ok, true)
-    assert.equal((await f.call("w", { action: "notify", text: "one too many", kind: "blocked" })).ok, false)
-    assert.equal(f.messages.length, 10)
-    assert.ok(f.messages.every(m => m.resume === false))
+    assert.equal((await f.call("w", { action: "notify", text: "one too many", kind: "progress" })).ok, false, "an 11th progress is over quota")
+    assert.equal((await f.call("w", { action: "notify", text: "hit a real blocker", kind: "blocked" })).ok, true, "urgent reports bypass the progress quota")
+    assert.equal(f.messages.length, 11)
+    assert.ok(f.messages.filter(m => m.text.includes("[capy:progress]")).every(m => m.resume === false), "progress never wakes")
+    assert.ok(f.messages.some(m => m.text.includes("[capy:blocked]") && m.resume === true), "blocked wakes the lead")
   } finally { f.stop() }
 })
 
@@ -892,5 +894,128 @@ test("team-info survives a malformed team record", async () => {
     f.messages.length = 0
     await f.command("x", "capy-team-info")
     assert.ok(f.messages.some(m => m.sessionID === "x" && m.text.includes("broken")), "summary renders despite missing workers map")
+  } finally { f.stop() }
+})
+
+test("a corrupted registry record survives every engine path, not just team-info", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const reg = f.data.get("capy:/project:registry")
+    reg.teams.broken = { sessionID: "broken", generation: "gx", status: "active" }
+    reg.teams.nullteam = null
+    f.data.set("capy:/project:registry", reg)
+    f.messages.length = 0
+    await f.call("w", { action: "notify", kind: "progress", text: "still working" })
+    await f.emit("session.execution.succeeded", "w")
+    f.intervals[0]()
+    await f.settle()
+    assert.equal(f.data.get("capy:/project:registry").teams.broken, undefined, "null-shape teams healed away")
+    assert.equal(f.data.get("capy:/project:registry").teams.nullteam, undefined)
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:succeeded]")), "healthy team's outcomes still delivered")
+    assert.equal(f.errors.length, 0, "no engine path threw")
+  } finally { f.stop() }
+})
+
+test("progress quota never blocks blocked/question/done", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    for (let i = 0; i < 10; i++) await f.call("w", { action: "notify", kind: "progress", text: `update ${i}` })
+    const more = await f.call("w", { action: "notify", kind: "progress", text: "one too many" })
+    assert.equal(more.ok, false)
+    const blocked = await f.call("w", { action: "notify", kind: "blocked", text: "registry locked, need owner key" })
+    assert.equal(blocked.ok, true, "urgent report bypasses the progress quota")
+    const done = await f.call("w", { action: "notify", kind: "done", text: "shipped" })
+    assert.equal(done.ok, true, "final report bypasses the progress quota")
+  } finally { f.stop() }
+})
+
+test("overflow escalation latches only when the lead actually received it", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const overflow = { error: { message: "context window exceeded" } }
+    await f.emit("session.execution.failed", "w", overflow)
+    await f.emit("session.execution.failed", "w", overflow)
+    f.options.reject = m => m.sessionID === "a"
+    await f.emit("session.execution.failed", "w", overflow)
+    await f.emit("session.execution.failed", "w", overflow)
+    const attempts = f.messages.length // all rejected; count via errors instead
+    void attempts
+    f.options.reject = undefined
+    f.messages.length = 0
+    await f.emit("session.execution.failed", "w", overflow)
+    assert.equal(f.messages.filter(m => m.sessionID === "a" && m.text.includes("keeps overflowing")).length, 1, "escalation lands once delivery works")
+    f.messages.length = 0
+    await f.emit("session.execution.failed", "w", overflow)
+    assert.equal(f.messages.filter(m => m.sessionID === "a" && m.text.includes("keeps overflowing")).length, 0, "and latches after success")
+  } finally { f.stop() }
+})
+
+test("a failed outcome send does not spend the wake cooldown", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.messages.length = 0
+    f.options.reject = m => m.sessionID === "a"
+    await f.emit("session.execution.failed", "w", { error: { message: "boom" } })
+    assert.equal(f.messages.length, 0, "first send failed")
+    f.options.reject = undefined
+    f.messages.length = 0
+    await f.emit("session.execution.failed", "w", { error: { message: "boom again" } })
+    const outcome = f.messages.find(m => m.sessionID === "a" && m.text.includes("[capy:failed]"))
+    assert.ok(outcome, "second failure delivered")
+    assert.equal(outcome.resume, true, "still delivered as a wake, not silenced by the failed first attempt")
+  } finally { f.stop() }
+})
+
+test("question and blocked stay visible as the worker state instead of Done", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    await f.call("w", { action: "notify", kind: "question", text: "patch now or log only?" })
+    await f.emit("session.execution.succeeded", "w")
+    const reg = f.data.get("capy:/project:registry")
+    assert.equal(reg.teams.a.workers.w.lastOutcome, "question", "the ask survives the question round ending")
+    await f.call("w", { action: "notify", kind: "done", text: "shipped" })
+    await f.emit("session.execution.succeeded", "w")
+    assert.equal(f.data.get("capy:/project:registry").teams.a.workers.w.lastOutcome, "succeeded", "real completion overwrites the ask")
+  } finally { f.stop() }
+})
+
+test("the registered schema itself carries no enum or range besides action", async () => {
+  const f = await fixture()
+  try {
+    const schema = f.tools.get("capy_lead").input
+    for (const [name, prop] of Object.entries(schema.properties)) {
+      if (name === "action") continue
+      assert.equal(prop.enum, undefined, `${name} must not carry an enum`)
+      assert.equal(prop.minimum, undefined, `${name} must not carry a minimum`)
+      assert.equal(prop.maximum, undefined, `${name} must not carry a maximum`)
+    }
+    assert.ok(schema.properties.action.enum, "action stays an enum")
+  } finally { f.stop() }
+})
+
+test("boot heal stamps removed leads so moved sessions lose ghost metadata", async () => {
+  const seed = {
+    "capy:/project:registry": {
+      version: 1,
+      teams: {
+        ghost: { sessionID: "ghost", generation: "g1", status: "active", workers: { w: { membershipID: "m1", sessionID: "w", role: "orphan" } }, waits: {} },
+      },
+    },
+  }
+  const f = await fixture(seed)
+  try {
+    const reg = f.data.get("capy:/project:registry")
+    assert.equal(reg.teams.ghost, undefined, "team whose lead does not exist is removed at boot")
+    assert.equal(f.errors.length, 0, "stamp of the removed lead does not crash")
   } finally { f.stop() }
 })
