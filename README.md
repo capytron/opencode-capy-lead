@@ -52,6 +52,15 @@ To try a finished build, replace the existing package entry with this clone's
 absolute path in **global** `opencode.json(c)`; do not load both copies. No live
 config change is performed by the tests. See `VERIFICATION.md` for limitations.
 
+## Global AGENTS.md
+
+On startup the plugin maintains one marked section in your global `~/.config/opencode/AGENTS.md` — "Autonomy — work until done": keep working (ask only for unauthorized hard-to-reverse actions, missing access, or owner-only decisions — a clear instruction that already covers the action never needs asking again), self-reliance (install lightweight scoped tooling or write a small script yourself; never cloud servers, paid services or system-wide changes; clean up after yourself; never weaken a check), finish-before-summarize (verify criteria; gaps your own review finds are work you fix before finalizing; asking never blocks while independent work remains), and scope discipline.
+
+opencode loads this file **additively** with every project's own `AGENTS.md` — project rules always apply too, and **solo sessions get the full behavior without a team**.
+
+- Existing file content is preserved; only the marked section is managed, idempotently.
+- Opt out by replacing the section with `<!-- capy-lead:autonomy:disabled -->`, or set `CAPY_LEAD_SKIP_AGENTS=1`.
+
 ## Update
 
 ```sh
@@ -61,7 +70,7 @@ opencode plugin update capytron/opencode-capy-lead
 Pin to a specific version by tag:
 
 ```sh
-opencode plugin add capytron/opencode-capy-lead#v0.7.0
+opencode plugin add capytron/opencode-capy-lead#v0.8.0
 ```
 
 Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` · `v0.6.0` · `v0.6.1` · `v0.6.2` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.

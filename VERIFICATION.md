@@ -60,7 +60,7 @@ npm test
 git diff --check
 ```
 
-The suite currently has 48 tests (engine, TUI, GUI bundle in jsdom, and dependency-policy guards). It runs the real entrypoint source, not copied
+The suite currently has 61 tests (engine, TUI, GUI bundle in jsdom, and dependency-policy guards). It runs the real entrypoint source, not copied
 business logic. Host storage, session admission, filesystem, timers and events
 are isolated adapters; user sessions and plugin KV are untouched.
 

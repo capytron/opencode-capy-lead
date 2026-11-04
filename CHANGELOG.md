@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.0 — 2026-11-04
+
+**Autonomy baseline for every session + slim team contract** (design reviewed by Astra, Argon and Kimi):
+
+- The plugin now manages one marked section in the global `~/.config/opencode/AGENTS.md` ("Autonomy — work until done", per machine): keep working (ask only for unauthorized hard-to-reverse actions, missing access, or owner-only decisions — a clear instruction already covers the action), self-reliance (install lightweight scoped tooling or write a small script; no cloud/paid/system-wide; cleanup; never weaken checks), finish-before-summarize (verify criteria; gaps you find are work you fix before finalizing; asking never blocks while independent work remains; report blockers when nothing remains), and scope discipline. Solo sessions get the full behavior without a team. Existing content is preserved; disable with `<!-- capy-lead:autonomy:disabled -->` or `CAPY_LEAD_SKIP_AGENTS=1`.
+- The lead PM contract slimmed to team mechanics only (ownership, workers as a concurrency limit, gap-fixing, untrusted reports, no polling, status reporting) and defers autonomy/permissions/completion to AGENTS.md — removing the contradiction where the contract asked before dependency changes while the autonomy rules say to install what the task needs.
+- Verified live: the running server reloaded the plugin, wrote the section, and the instruction watcher injected it into open sessions immediately. 61 tests.
+
+
 ## v0.7.1 — 2026-11-04
 
 **Engine bug round two** (dual audit by Argon and Kimi; every fix below is reproduced or statically confirmed with a regression test):

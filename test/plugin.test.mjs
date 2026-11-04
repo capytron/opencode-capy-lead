@@ -13,12 +13,20 @@ async function fixture(seed = {}, options = {}) {
   const events = []
   const intervals = []
   const errors = []
+  const files = new Map(Object.entries(options.files ?? {}))
   let consumer
   const copy = (v) => v === undefined ? undefined : structuredClone(v)
   const context = vm.createContext({
     console: { ...console, error: (...args) => errors.push(args) }, AbortController, structuredClone, randomUUID: () => String(Math.random()),
-    readFile: async (path) => { if (path.endsWith("config.json") && options.config) return JSON.stringify(options.config); throw Object.assign(new Error("not found"), { code: "ENOENT" }) },
-    mkdir: async () => {}, writeFile: async () => {},
+    process: { env: { ...(options.env ?? {}) } },
+    homedir: () => "/home/tester",
+    join: (...parts) => parts.join("/").replace(/\/{2,}/g, "/"),
+    readFile: async (path) => {
+      if (files.has(path)) return files.get(path)
+      if (path.endsWith("config.json") && options.config) return JSON.stringify(options.config)
+      throw Object.assign(new Error("not found"), { code: "ENOENT" })
+    },
+    mkdir: async () => {}, writeFile: async (path, content) => { files.set(path, content) },
     setTimeout, clearTimeout,
     setInterval: (fn) => { intervals.push(fn); return fn }, clearInterval: () => {},
     Bun: { file: () => ({ json: async () => ({}), exists: async () => false, text: async () => "" }), write: async () => 0, spawnSync: () => ({ stdout: "" }) },
@@ -64,7 +72,7 @@ async function fixture(seed = {}, options = {}) {
   const command = (id, name, text = "") => commands.get(name).execute({ sessionID: id, prompt: { text } })
   const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)) }
   const emit = async (type, sessionID, extra = {}) => { events.push({ type, data: { sessionID, ...extra } }); consumer?.(); await settle() }
-  return { call, command, stop, hooks, data, sessions, messages, add, emit, settle, intervals, options, errors }
+  return { call, command, stop, hooks, data, sessions, messages, add, emit, settle, intervals, options, errors, files }
 }
 
 test("context hooks work for ordinary sessions and two independent leads", { timeout: 1500 }, async () => {
@@ -694,5 +702,55 @@ test("notify quota is refreshed when a position is removed and re-added", async 
     await f.call("a", { action: "add", sessionID: "w", role: "w1" })
     const fresh = await f.call("w", { action: "notify", kind: "progress", text: "back with a fresh quota" })
     assert.equal(fresh.ok, true)
+  } finally { f.stop() }
+})
+
+test("the plugin installs its autonomy section into the global AGENTS.md", async () => {
+  const f = await fixture()
+  try {
+    const written = f.files.get("/home/tester/.config/opencode/AGENTS.md")
+    assert.ok(written, "global file written")
+    assert.match(written, /capy-lead:autonomy v1/)
+    assert.match(written, /reporting a finding is never a valid final action/)
+    assert.match(written, /No cloud servers, paid services/)
+    assert.equal(f.errors.length, 0)
+  } finally { f.stop() }
+})
+
+test("an existing global AGENTS.md keeps its own content untouched", async () => {
+  const f = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": "# My own rules\n\nAlways use pnpm.\n" } })
+  try {
+    const written = f.files.get("/home/tester/.config/opencode/AGENTS.md")
+    assert.ok(written.startsWith("# My own rules"), "user content preserved first")
+    assert.match(written, /Always use pnpm\./)
+    assert.match(written, /capy-lead:autonomy v1/)
+  } finally { f.stop() }
+})
+
+test("the disabled marker stops management; re-runs never duplicate the section", async () => {
+  const f = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": "# Mine\n\n<!-- capy-lead:autonomy:disabled -->\n" } })
+  try {
+    assert.equal(f.files.get("/home/tester/.config/opencode/AGENTS.md"), "# Mine\n\n<!-- capy-lead:autonomy:disabled -->\n", "no rewrite when disabled")
+  } finally { f.stop() }
+  const once = await fixture()
+  try {
+    const content = once.files.get("/home/tester/.config/opencode/AGENTS.md")
+    const again = await fixture({}, { files: { "/home/tester/.config/opencode/AGENTS.md": content } })
+    try {
+      assert.equal(again.files.get("/home/tester/.config/opencode/AGENTS.md"), content, "idempotent: unchanged content is not rewritten")
+    } finally { again.stop() }
+  } finally { once.stop() }
+})
+
+test("contract v2 defers autonomy to AGENTS.md and keeps team mechanics", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    const event = { sessionID: "a", system: [] }
+    await f.hooks.get("context")(event)
+    assert.match(event.system[0].text, /Follow the autonomy, scope, permission, and completion rules in AGENTS\.md/)
+    assert.match(event.system[0].text, /Gaps you or your workers find .* are unfinished work/)
+    assert.match(event.system[0].text, /not promises to begin/)
+    assert.doesNotMatch(event.system[0].text, /Ask before dependency/, "the ask-bar lives in AGENTS.md only")
   } finally { f.stop() }
 })
