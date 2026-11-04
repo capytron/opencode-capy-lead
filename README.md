@@ -61,6 +61,25 @@ opencode loads this file **additively** with every project's own `AGENTS.md` —
 - Existing file content is preserved; only the marked section is managed, idempotently.
 - Opt out by replacing the section with `<!-- capy-lead:autonomy:disabled -->`, or set `CAPY_LEAD_SKIP_AGENTS=1`.
 
+## Tests
+
+`npm test` runs five layers:
+
+1. **Engine unit tests** — the real `index.ts` in a VM fixture with an isolated host adapter (registry lifecycle, waits, idle gate, recovery, AGENTS.md management).
+2. **TUI tests** — strip states, switcher, scoping.
+3. **GUI tests** — the shipped Desktop bundle executed with real Solid rendering in jsdom.
+4. **Dependency-policy guards** — zero runtime deps, devDep allowlist, lifecycle-free script names, host-shared bundle requires only.
+5. **Install-flow E2E** — the real `opencode plugin add` from GitHub in an isolated XDG sandbox; catches install-breaking repo changes (dependency trees, lifecycle scripts) and documents the CLI's config-form quirk (`plugin update` must receive the exact string your config holds). Skips when the `opencode` binary or network is unavailable.
+
+## Troubleshooting
+
+**`opencode plugin update` says "Plugin is not configured: …"** — the CLI matches the *exact* string stored in your config. Check what your machine has (`cat ~/.config/opencode/opencode.json`, the `plugins` array), then either pass that exact string to `update`, or reinstall cleanly:
+
+```sh
+opencode plugin remove "<exact string from your config>"
+opencode plugin add capytron/opencode-capy-lead
+```
+
 ## Update
 
 ```sh
@@ -70,7 +89,7 @@ opencode plugin update capytron/opencode-capy-lead
 Pin to a specific version by tag:
 
 ```sh
-opencode plugin add capytron/opencode-capy-lead#v0.8.1
+opencode plugin add capytron/opencode-capy-lead#v0.8.2
 ```
 
 Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` · `v0.6.0` · `v0.6.1` · `v0.6.2` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.

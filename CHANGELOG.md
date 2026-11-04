@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.2 — 2026-11-04
+
+**Install-flow E2E test + test guide** (after a teammate hit `plugin update` → "Plugin is not configured"):
+
+- New `test/install-flow.test.mjs`: runs the real `opencode plugin add` from GitHub in an isolated XDG sandbox — the layer that catches install-breaking repo changes (runtime dependency trees, lifecycle-named scripts) before they ship — and locks the CLI's config-form quirk as its documented behavior.
+- README now documents the five test layers and the update troubleshooting (pass the exact string your config holds, or remove + add).
+- Known sandbox limitation documented: `plugin list/check/update` resolve through the elected background service, so XDG redirection cannot isolate them; update flows are verified on real machines. 67 tests.
+
+
 ## v0.8.1 — 2026-11-04
 
 **AGENTS.md migration hardening** (Argon review round):
