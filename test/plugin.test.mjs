@@ -551,3 +551,148 @@ test("notify rejects over-long text with a teaching error instead of silent trun
     assert.equal(ok.ok, true)
   } finally { f.stop() }
 })
+
+test("a woken wait is owned by its timer: no premature decision, no gate ping", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    // Budget fully spent, worker just woken by the last check.
+    const reg = f.data.get("capy:/project:registry")
+    reg.teams.a.waits.w = { sessionID: "w", role: "w1", reason: "download", nextCheckAt: Date.now() + 60000, revision: "r1", maxChecks: 1, checkCount: 1, status: "woken", admittedAt: Date.now() }
+    f.messages.length = 0
+    await f.emit("session.execution.succeeded", "b")
+    assert.ok(!f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:decision]")), "no premature decision while woken")
+    f.messages.length = 0
+    // The woken worker ending silently must not be gate-pinged either.
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(!f.messages.some(m => m.sessionID === "w"), "no gate ping while the wait owns the worker")
+    assert.ok(!f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:decision]")), "decision still waits for the timer")
+  } finally { f.stop() }
+})
+
+test("failed gate ping retries instead of escalating to the lead", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.options.reject = m => m.sessionID === "w"
+    await f.emit("session.execution.succeeded", "w")
+    assert.equal(f.messages.filter(m => m.sessionID === "w").length, 0, "ping send failed")
+    f.options.reject = undefined
+    f.messages.length = 0
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("[capy:gate]")), "ping must retry on the next silent round")
+    assert.ok(!f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:escalate]")), "must not skip to escalation")
+  } finally { f.stop() }
+})
+
+test("wait retries against an exhausted budget never re-alert the lead", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const reg = f.data.get("capy:/project:registry")
+    reg.teams.a.waits.w = { sessionID: "w", role: "w1", reason: "job", nextCheckAt: Date.now(), revision: "r1", maxChecks: 1, checkCount: 1, status: "waiting", notified: true }
+    f.intervals[0]()
+    await f.settle()
+    const decisions = () => f.messages.filter(m => m.sessionID === "a" && m.text.includes("[capy:decision]")).length
+    f.messages.length = 0
+    await f.call("w", { action: "wait", reason: "retry", checkInMinutes: 5 })
+    await f.call("w", { action: "wait", reason: "retry again", checkInMinutes: 5 })
+    await f.call("w", { action: "wait", reason: "retry three", checkInMinutes: 5 })
+    assert.equal(decisions(), 1, "lead alerted exactly once for the exhausted budget")
+  } finally { f.stop() }
+})
+
+test("question and blocked reports suppress the outcome echo", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    await f.call("w", { action: "notify", kind: "question", text: "patch now or log only?" })
+    f.messages.length = 0
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(f.messages.every(m => !m.text.includes("execution succeeded")), "no outcome echo after a question")
+    assert.ok(f.messages.every(m => !m.text.includes("[capy:outcome]")), "no outcome message at all")
+  } finally { f.stop() }
+})
+
+test("re-adding a position authorizes a fresh check budget as documented", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const reg = f.data.get("capy:/project:registry")
+    reg.teams.a.waits.w = { sessionID: "w", role: "w1", reason: "job", nextCheckAt: Date.now(), revision: "r1", maxChecks: 1, checkCount: 1, status: "decision", notified: true }
+    const blocked = await f.call("w", { action: "wait", reason: "again", checkInMinutes: 5 })
+    assert.equal(blocked.ok, false)
+    assert.match(blocked.error, /Budget exhausted/)
+    assert.equal((await f.call("a", { action: "add", sessionID: "w", role: "w1" })).ok, true)
+    const fresh = await f.call("w", { action: "wait", reason: "fresh budget", checkInMinutes: 5 })
+    assert.equal(fresh.ok, true, "re-add resets the wait budget")
+    const after = f.data.get("capy:/project:registry")
+    assert.notEqual(after.teams.a.workers.w.membershipID, "m-old", "membership id rotates on re-add")
+  } finally { f.stop() }
+})
+
+test("overflow recovery: leads are excluded; a crash-looping worker escalates to the lead once", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const overflow = { error: { message: "context window exceeded" } }
+    f.messages.length = 0
+    await f.emit("session.execution.failed", "a", overflow)
+    assert.equal(f.messages.length, 0, "leads never enter the recovery loop")
+    await f.emit("session.execution.failed", "w", overflow)
+    await f.emit("session.execution.failed", "w", overflow)
+    assert.equal(f.messages.filter(m => m.sessionID === "w" && m.text.includes("[capy:recovery]")).length, 2, "two worker recoveries")
+    f.messages.length = 0
+    await f.emit("session.execution.failed", "w", overflow)
+    assert.equal(f.messages.filter(m => m.sessionID === "a" && m.text.includes("keeps overflowing")).length, 1, "lead alerted once about the crash-loop")
+    await f.emit("session.execution.failed", "w", overflow)
+    assert.equal(f.messages.filter(m => m.sessionID === "a" && m.text.includes("keeps overflowing")).length, 1, "no repeat alerts within the hour")
+    assert.equal(f.messages.filter(m => m.sessionID === "w").length, 0, "no more direct resumes")
+  } finally { f.stop() }
+})
+
+test("deleting a dependency releases its waiters immediately", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.add("dep")
+    await f.call("w", { action: "wait", reason: "waiting on dep", checkInMinutes: 60, waitForSessionId: "dep" })
+    await f.emit("session.deleted", "dep")
+    const wait = f.data.get("capy:/project:registry").teams.a.waits.w
+    assert.ok(wait.nextCheckAt <= Date.now(), "waiter released for the next tick")
+  } finally { f.stop() }
+})
+
+test("URLs with query strings do not trigger the question hint", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const res = await f.call("w", { action: "notify", kind: "progress", text: "Checked https://example.com/api?page=1 — 200 OK" })
+    assert.equal(res.ok, true)
+    assert.equal(res.hint, undefined, "URL question mark is not a question")
+  } finally { f.stop() }
+})
+
+test("notify quota is refreshed when a position is removed and re-added", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    for (let i = 0; i < 10; i++) await f.call("w", { action: "notify", kind: "progress", text: `update ${i}` })
+    const over = await f.call("w", { action: "notify", kind: "progress", text: "one too many" })
+    assert.equal(over.ok, false)
+    assert.match(over.error, /limit/i)
+    assert.equal((await f.call("a", { action: "remove", sessionID: "w" })).ok, true)
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    const fresh = await f.call("w", { action: "notify", kind: "progress", text: "back with a fresh quota" })
+    assert.equal(fresh.ok, true)
+  } finally { f.stop() }
+})

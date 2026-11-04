@@ -70,9 +70,11 @@ export default Plugin.define({
         }>
           <ul><For each={teams()}>{(team) => {
             const title = String(team.lead.title ?? "").replace(/\s+/g, " ").trim()
+            const base = team.name.endsWith("…") ? team.name.slice(0, -1) : team.name
+            const showTitle = title && title !== team.name && !(base && title.startsWith(base))
             const mark = marker(team)
             return <li><button type="button" onClick={() => openLead(team)} title={team.lead.id}>
-              <strong>{team.name}{title && title !== team.name ? ` — ${title.slice(0, 45)}` : ""}</strong>
+              <strong>{team.name}{showTitle ? ` — ${title.slice(0, 45)}` : ""}</strong>
               <small>{mark ? `[${mark}] · ` : ""}{secondary(team)}</small>
             </button></li>
           }}</For></ul>
@@ -84,7 +86,7 @@ export default Plugin.define({
       if (session && memberFor(session)?.role === "lead") ctx.layout.toggle(panelKey, session)
     }
     const jump = (session: MountedSession, id: string) => {
-      if (!session.server.connected || !sessionsFor(session).some((info) => info.id === id && info.location.directory === session.directory)) return
+      if (!session.server.connected || !sessionsFor(session).some((info) => info.id === id && info.location?.directory === session.directory)) return
       ctx.tabs.open({ server: session.server.id, id }, { focus: true })
     }
 
@@ -132,8 +134,10 @@ export default Plugin.define({
         if (member?.role === "worker") notify(event.data.sessionID, `Worker “${member.worker.role}” failed`, event.id, true)
       }))
       off.push(data.on("form.created", (event) => {
-        const member = membership(teamsIn(snapshot().key === key ? snapshot().sessions : [], directory), event.data.form.sessionID)
-        if (member) notify(event.data.form.sessionID, member.role === "lead" ? "The lead is waiting for your answer" : `Worker “${member.worker.role}” is waiting for your answer`, event.id)
+        const formID = event.data.form?.sessionID
+        if (!formID) return
+        const member = membership(teamsIn(snapshot().key === key ? snapshot().sessions : [], directory), formID)
+        if (member) notify(formID, member.role === "lead" ? "The lead is waiting for your answer" : `Worker “${member.worker.role}” is waiting for your answer`, event.id)
       }))
       void source.refresh()
       // Reconcile missed updates after a disconnected event stream; never drive work.

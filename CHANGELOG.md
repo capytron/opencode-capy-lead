@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1 — 2026-11-04
+
+**Engine bug round two** (dual audit by Argon and Kimi; every fix below is reproduced or statically confirmed with a regression test):
+
+- **Wake-loop fixes**: a `woken` wait is owned by its 5-minute admission timer only — the exhausted-check comparison no longer re-fires `[capy:decision]` on every unrelated event, and a woken worker ending silently is no longer gate-pinged on top of it (double wake). Gate pings latch only after a successful send, so a failed ping retries instead of escalating to the lead. Wait retries against an exhausted budget never re-alert the lead.
+- **Token-drain fixes**: question/blocked reports (which already wake the lead) no longer get a redundant "execution succeeded" echo; overflow recovery never enters the lead loop and, after two failed recoveries in an hour, escalates once to the lead instead of resuming the worker forever; deleting a dependency session immediately releases its waiters (was up to a full interval); a tick arriving mid-flight is remembered and re-run instead of dropped.
+- **Re-add actually authorizes a fresh budget** (as the decision message always claimed): membership rotates, stale waits and idle-gate state are cleared, and the notify quota resets with them.
+- **Polish**: question-hint ignores URLs with query strings; compactions tracking limited to members; `purge` clears the notify budget; team fallback names snapshot once at stamp time (no flicker as titles mutate) with prefix-deduped display and deterministic `Team N` ordering; GUI guards on malformed `form.created` payloads. 57 tests.
+
+
 ## v0.7.0 — 2026-11-04
 
 **Multi-team visibility, team naming, and a long-content channel** (design reviewed with Astra and Argon against novice/non-dev scenarios):

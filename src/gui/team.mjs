@@ -23,7 +23,7 @@ export function teamsIn(sessions, directory) {
   })
   // Stable fallback numbering for teams with no name and no usable title,
   // then most-recently-active first so a forgotten team resurfaces on top.
-  const byCreation = [...teams].sort((a, b) => a.created - b.created)
+  const byCreation = [...teams].sort((a, b) => a.created - b.created || a.lead.id.localeCompare(b.lead.id))
   for (const team of teams) if (!team.name) team.name = `Team ${byCreation.indexOf(team) + 1}`
   return [...teams].sort((a, b) => b.activity - a.activity)
 }

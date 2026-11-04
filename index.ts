@@ -36,7 +36,7 @@ export default {
     const compactions = new Map()
     const recoveries = new Map()
     const notifyBudget = new Map()
-    const purge = (id) => { activity.delete(id); notices.delete(id); compactions.delete(id); recoveries.delete(id) }
+    const purge = (id) => { activity.delete(id); notices.delete(id); compactions.delete(id); recoveries.delete(id); notifyBudget.delete(id) }
     const local = async (id) => {
       const info = await ctx.session.get({ sessionID: id })
       return (info.location?.directory ?? info.directory) === dir
@@ -66,13 +66,18 @@ export default {
       // Clear stale stamps even for moved leads; only write fresh stamps for
       // sessions still in this project.
       if (!team || team.status !== "active" || !stillHere) delete metadata.capyTeam
-      if (team?.status === "active" && stillHere) metadata.capyTeam = {
-        leadID,
-        name: team.name ?? null,
-        workers: Object.values(team.workers).map(w => ({
-          sessionID: w.sessionID, role: w.role, lastOutcome: w.lastOutcome ?? null,
-          lastOutcomeTime: w.lastOutcomeTime ?? null, waiting: team.waits[w.sessionID]?.reason ?? null,
-        })),
+      if (team?.status === "active" && stillHere) {
+        // Snapshot a stable fallback name once, so badge/switcher names do not
+        // flicker as the session title mutates. capy_lead rename overrides it.
+        if (!team.name && line(info.title)) { team.name = line(info.title, 24); await save(registry) }
+        metadata.capyTeam = {
+          leadID,
+          name: team.name ?? null,
+          workers: Object.values(team.workers).map(w => ({
+            sessionID: w.sessionID, role: w.role, lastOutcome: w.lastOutcome ?? null,
+            lastOutcomeTime: w.lastOutcomeTime ?? null, waiting: team.waits[w.sessionID]?.reason ?? null,
+          })),
+        }
       }
       await ctx.session.update({ sessionID: leadID, metadata }).catch(error => {
         console.error("[capy-lead] stamp update failed (non-blocking):", error)
@@ -308,7 +313,12 @@ export default {
                 const roleText = line(input.role)
                 if (!roleText) throw new Error("Specify a short role (2–4 words, e.g. backend-eng); scope belongs in tickets or the worker's first prompt")
                 if (roleText.length > 50) throw new Error(`Role too long (${roleText.length}/50). Use a short position name like backend-eng; scope belongs in tickets or the worker's first prompt`)
-                team.workers[input.sessionID] = { membershipID: randomUUID(), ...team.workers[input.sessionID], sessionID: input.sessionID, role: roleText.slice(0, 50), lastActivityAt: Date.now() }
+                // Re-adding an existing position is the documented way to authorize a
+                // fresh check budget: rotate the membership, drop stale waits and
+                // reset idle-gate state. The spread must not restore the old ids.
+                const readding = Boolean(team.workers[input.sessionID])
+                if (readding) { delete team.waits[input.sessionID]; purge(input.sessionID) }
+                team.workers[input.sessionID] = { ...team.workers[input.sessionID], membershipID: randomUUID(), sessionID: input.sessionID, role: roleText.slice(0, 50), lastActivityAt: Date.now() }
               }
               if (input.action === "remove") {
                 if (!member?.worker || member.leadID !== id) throw new Error("Not a position in your team")
@@ -371,7 +381,7 @@ export default {
             await stamp(member.leadID)
             // Workers sometimes bury questions in progress updates; progress never
             // wakes the lead, so nudge the worker instead of losing the question.
-            const asks = kind === "progress" && (/[?]/.test(String(input.text)) || /should i\b/i.test(String(input.text)))
+            const asks = kind === "progress" && (/[?]/.test(String(input.text).replace(/https?:\/\/\S+/g, "")) || /should i\b/i.test(String(input.text)))
             return { output: { ok: true, kind, ...(asks ? { hint: "Progress does not wake the lead. If you need an answer, re-send as kind=question." } : {}) } }
           }
           if (input.action === "wait") {
@@ -385,8 +395,9 @@ export default {
               if (!owns(registry, member, id)) throw new Error("Team or membership changed")
               const previous = current.team.waits[id]
               if (previous?.checkCount >= previous?.maxChecks) {
-                previous.status = "decision"
-                previous.notified = false
+                // Enter decision once. A worker retrying wait against the same
+                // exhausted budget must not re-alert the lead every time.
+                if (previous.status !== "decision") { previous.status = "decision"; previous.notified = false }
                 await save(registry)
                 return
               }
@@ -411,8 +422,12 @@ export default {
 
     // All asynchronous deliveries validate team generation and wait revision.
     let ticking = false
+    let rerun = false
     const tick = async () => {
-      if (ticking || controller.signal.aborted) return
+      if (controller.signal.aborted) return
+      // A tick arriving mid-flight means fresh state may be due (e.g. a
+      // dependency just released waits); remember it instead of dropping it.
+      if (ticking) { rerun = true; return }
       ticking = true
       try {
         const jobs = await mutate(async () => {
@@ -424,7 +439,12 @@ export default {
             for (const wait of Object.values(team.waits)) {
               const worker = team.workers[wait.sessionID]
               if (!worker || worker.busy) continue
-              const decision = wait.status === "decision" || (wait.status === "woken" && Date.now() - wait.admittedAt >= 300000) || wait.checkCount >= wait.maxChecks || Date.now() - wait.nextCheckAt >= 21600000
+              // A woken wait is owned by its 5-minute admission timer: the
+              // budget comparison would re-fire "decision" on every unrelated
+              // event while the worker has barely started checking.
+              const decision = wait.status === "decision" || (wait.status === "woken"
+                ? Date.now() - wait.admittedAt >= 300000
+                : wait.checkCount >= wait.maxChecks || Date.now() - wait.nextCheckAt >= 21600000)
               if (wait.status === "woken" && !decision) continue
               if (!decision && wait.status === "waiting" && wait.nextCheckAt > Date.now()) continue
               if (decision && wait.notified) continue
@@ -478,16 +498,22 @@ export default {
           await stamp(job.leadID)
         }
       } catch (error) { console.error("[capy-lead] heartbeat:", error) }
-      finally { ticking = false }
+      finally { ticking = false; if (rerun && !controller.signal.aborted) { rerun = false; void tick() } }
     }
     const handle = async (event) => {
       const id = event.data.sessionID
-      if (event.type.startsWith("session.compaction.")) { compactions.set(id, Date.now()); return }
+      if (event.type.startsWith("session.compaction.")) { if (role(await load(), id)) compactions.set(id, Date.now()); return }
       if (event.type === "session.deleted") {
         const changed = await mutate(async () => {
           const registry = await load()
+          // Release waits that were watching this session — even when the
+          // deleted session held no position — so no waiter sits out its
+          // full interval for a dependency that no longer exists.
+          for (const team of Object.values(registry.teams)) for (const wait of Object.values(team.waits)) {
+            if (wait.waitForSessionID === id && wait.status === "waiting") wait.nextCheckAt = Date.now()
+          }
           const member = role(registry, id)
-          if (!member) return []
+          if (!member) { await save(registry); return [] }
           if (!member.worker) {
             for (const worker of Object.keys(member.team.workers)) purge(worker)
             delete registry.teams[id]
@@ -498,6 +524,7 @@ export default {
           return [member.leadID]
         })
         await publish(changed)
+        void tick()
         return
       }
       if (event.type === "session.status") {
@@ -531,6 +558,7 @@ export default {
       void tick()
       if (!member || member.team.status !== "active" || !(await local(id))) return
       if (event.type === "session.execution.interrupted" && event.data.reason === "user") return
+      if (!member.worker) return // leads never enter worker recovery or idle-gate loops
       if (event.type === "session.execution.failed" && /context.{0,30}(length|window|exceed)|prompt.{0,20}(too long|exceed|max length)|1261/i.test(String(event.data.error?.message ?? JSON.stringify(event.data.error)))) {
         const stamps = (recoveries.get(id) ?? []).filter(t => Date.now() - t < 3600000)
         if (stamps.length < 2) {
@@ -540,20 +568,25 @@ export default {
             if (!continuity && Date.now() - (compactions.get(id) ?? 0) > 300000) await ctx.session.compact({ sessionID: id })
             if (await send(id, "[capy:recovery] Context overflow. Continue unfinished work after compaction; do not repeat completed actions.", "capy-lead overflow recovery", true, {}, registry => owns(registry, member, id))) return
           } catch (error) { console.error("[capy-lead] recovery failed:", error) }
+        } else if (stamps.length === 2) {
+          // Recovery budget spent and still overflowing: stop resuming the
+          // worker in a loop; surface the crash-loop to the lead once per hour.
+          stamps.push(Date.now()); recoveries.set(id, stamps)
+          await send(member.leadID, `[capy:recovery] ${tag(member.worker.role)} keeps overflowing context even after compaction. Intervene: split the work, assign a fresh position, or take it over.`, "capy-lead recovery escalation", true, {}, registry => owns(registry, member, id)).catch(error => { console.error("[capy-lead] recovery escalation:", error); return false })
+          return
         }
       }
-      if (!member.worker) return // never wake a failed lead in a loop
       const current = role(await load(), id)
       if (!owns(await load(), member, id)) return
       if (event.type === "session.execution.succeeded") {
-        if (["waiting", "decision", "dispatching"].includes(current.team.waits[id]?.status)) return
+        if (["waiting", "decision", "dispatching", "woken"].includes(current.team.waits[id]?.status)) return
         const state = activity.get(id) ?? {}
         activity.set(id, { ...state, reported: false, kind: undefined })
         if (!state.reported) {
           if (state.escalated) return
           if (!state.pinged) {
-            activity.set(id, { pinged: true })
-            await send(id, "[capy:gate] Report with capy_lead notify (done/blocked/question), or register a wait for pending work. Do not create a wait just to await future assignments.", "capy-lead idle gate", true, {}, registry => owns(registry, member, id))
+            const pinged = await send(id, "[capy:gate] Report with capy_lead notify (done/blocked/question), or register a wait for pending work. Do not create a wait just to await future assignments.", "capy-lead idle gate", true, {}, registry => owns(registry, member, id))
+            if (pinged) activity.set(id, { pinged: true })
             return
           }
           const escalated = await send(member.leadID, `[capy:escalate] ${tag(member.worker.role)} ended without a report or wait after one reminder. Decide what to do next.`, "capy-lead idle gate escalation", true, {}, registry => owns(registry, member, id))
@@ -562,6 +595,9 @@ export default {
         }
         // A done report already told the lead; the outcome echo is pure noise.
         if (state.kind === "done") { await stamp(member.leadID); return }
+        // A question or blocked report already woke the lead with full context;
+        // echoing "execution succeeded" afterwards is a duplicate wake.
+        if (state.kind === "question" || state.kind === "blocked") { await stamp(member.leadID); return }
       }
       const now = Date.now()
       const resume = now - (notices.get(id) ?? 0) >= 60000

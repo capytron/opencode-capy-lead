@@ -61,7 +61,7 @@ export default {
         })
       }
       // Stable fallback numbering for teams with no name and no usable title.
-      const numbered = new Map([...teams].sort((a, b) => a.created - b.created).map((team, index) => [team, index + 1]))
+      const numbered = new Map([...teams].sort((a, b) => a.created - b.created || a.lead.id.localeCompare(b.lead.id)).map((team, index) => [team, index + 1]))
       for (const team of teams) if (!team.name) team.name = `Team ${numbered.get(team)}`
       // Most recently active first: the team someone forgot about sits on top.
       return [...teams].sort((a, b) => b.activity - a.activity)
@@ -435,6 +435,8 @@ function SwitcherPanel(props) {
               },
               children: (team, index) => {
                 const title = String(team.lead.title ?? "").replace(/\s+/g, " ").trim()
+                const base = team.name.endsWith("…") ? team.name.slice(0, -1) : team.name
+                const showTitle = title && title !== team.name && !(base && title.startsWith(base))
                 return jsxs("box", {
                   flexDirection: "row",
                   gap: 1,
@@ -460,7 +462,7 @@ function SwitcherPanel(props) {
                       wrapMode: "none", truncate: true, flexGrow: 1, minWidth: 0,
                       get children() {
                         const mark = marker(team)
-                        return `${team.name}${title && title !== team.name ? ` — ${title}` : ""}${mark ? ` [${mark}]` : ""}`
+                        return `${team.name}${showTitle ? ` — ${title}` : ""}${mark ? ` [${mark}]` : ""}`
                       },
                     }),
                     jsx("text", {
