@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs"
 import { join } from "node:path"
 
 // End-to-end install coverage against the REAL opencode installer in an
@@ -52,12 +52,31 @@ test("install flow: add installs lean, quirk documented, remove cleans", { timeo
     const config = JSON.parse(readFileSync(configFile, "utf8"))
     assert.ok(config.plugins.includes(SPEC), "config holds the shorthand spec")
 
-    // 2. Ship-gate invariants that keep the install lean and prepare-free.
-    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"))
-    assert.equal(pkg.dependencies, undefined, "no runtime dependencies (host shares its modules)")
-    assert.equal(pkg.workspaces, undefined, "workspaces trigger git-dep preparation")
-    for (const name of ["postinstall", "build", "preinstall", "install", "prepack", "prepare"]) {
-      assert.equal(pkg.scripts?.[name], undefined, `scripts.${name} must not exist (git-dep preparation trigger)`)
+    // 2. Ship-gate invariants checked against BOTH the working tree and the
+    //    copy the installer actually fetched (they can differ by revision).
+    const checkInvariants = (pkg, label) => {
+      assert.equal(pkg.dependencies, undefined, `${label}: no runtime dependencies`)
+      assert.equal(pkg.workspaces, undefined, `${label}: workspaces trigger git-dep preparation`)
+      for (const name of ["postinstall", "build", "preinstall", "install", "prepack", "prepare"]) {
+        assert.equal(pkg.scripts?.[name], undefined, `${label}: scripts.${name} must not exist (git-dep preparation trigger)`)
+      }
+    }
+    checkInvariants(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")), "working tree")
+    const npmCache = join(root, "cache", "opencode", "npm")
+    const staged = readdirSync(npmCache, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("git-opencode-capy-lead"))
+      .flatMap((entry) => readdirSync(join(npmCache, entry.name), { withFileTypes: true })
+        .filter((inner) => inner.isDirectory())
+        .map((inner) => join(npmCache, entry.name, inner.name)))
+    assert.ok(staged.length >= 1, "installer staged a copy of the plugin")
+    for (const dir of staged) {
+      // The staging root is the installer's own manifest (it declares the
+      // plugin as a git dependency); the plugin itself lands in node_modules.
+      const installed = join(dir, "node_modules", "opencode-capy-lead")
+      assert.ok(existsSync(join(installed, "package.json")), `plugin installed at ${dir.slice(-24)}`)
+      checkInvariants(JSON.parse(readFileSync(join(installed, "package.json"), "utf8")), `installed ${dir.slice(-24)}`)
+      const tree = readdirSync(join(dir, "node_modules")).filter((name) => !name.startsWith("."))
+      assert.deepEqual(tree, ["opencode-capy-lead"], `lean install: node_modules holds only the plugin, found [${tree.join(", ")}]`)
     }
 
     // 3. The documented config-form quirk: when the config holds a different

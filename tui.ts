@@ -153,6 +153,7 @@ export default {
           running: context.data.session.status(worker.sessionID) === "running",
           outcome: worker.lastOutcome ?? null,
           outcomeTime: worker.lastOutcomeTime ?? null,
+          waiting: worker.waiting ?? null,
           last: index === active.team.workers.length - 1,
         })),
       ]
@@ -252,6 +253,7 @@ export default {
 }
 
 function outcomeText(row, theme) {
+  if (row.waiting) return { text: `⏳ ${row.waiting}`.trim(), color: theme.text.muted }
   if (row.outcome === "succeeded")
     return { text: `✓ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.success.base }
   if (row.outcome === "failed")
@@ -267,8 +269,9 @@ function TeamStrip(props) {
     const workers = list.filter((row) => row.kind === "worker")
     return {
       running: workers.filter((row) => row.running).length,
-      done: workers.filter((row) => row.outcome === "succeeded").length,
-      failed: workers.filter((row) => row.outcome === "failed").length,
+      // A succeeded outcome while waiting is not done — the wait owns it.
+      done: workers.filter((row) => row.outcome === "succeeded" && !row.waiting).length,
+      failed: workers.filter((row) => row.outcome === "failed" && !row.waiting).length,
       total: workers.length,
     }
   })

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.8.3 — 2026-11-04
+
+**Hotfix: shipping bug both raw reviews caught independently + binding gate** (Astra & Argon open review):
+
+- **Fixed `rename is not defined`** (P0): the atomic AGENTS.md write used `rename` without importing it — shipped broken in v0.8.1/v0.8.2. The VM test harness masked it by injecting mocks after stripping imports, the same blind spot as the historical `readLead` incident. Also imports `readdir`/`rm` for the new backup retention.
+- **New binding gate** (`test/binding.test.mjs`): relaxed tsc over `index.ts`/`tui.ts` fails only on undeclared-identifier errors (the readLead/rename class), plus a harness rule that the VM sandbox may never inject a builtin the source does not import. Verified it turns red on the exact bug.
+- **Backup retention**: keep the newest 3 `AGENTS.md.bak-*` files instead of growing forever; temp files carry a random suffix so concurrent same-process setups cannot collide.
+- **TUI truth fix**: workers with a scheduled wait now show ⏳ and are no longer counted as done (✓) after a succeeded outcome — matching the Desktop GUI.
+- **E2E now verifies the actual install**, not just the working tree: invariants are checked against the fetched copy and `node_modules` must contain exactly the plugin (lean-install proof).
+- README sync: unrelated-session behavior, the unmarked near-verbatim migration rule, and backup policy now documented as implemented. Full typing of the core (129 relaxed-check errors of shape noise) is the follow-up. 69 tests.
+
+
 ## v0.8.2 — 2026-11-04
 
 **Install-flow E2E test + test guide** (after a teammate hit `plugin update` → "Plugin is not configured"):

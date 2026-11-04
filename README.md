@@ -29,8 +29,9 @@ worker that completed a greeting. Broader live-host acceptance remains pending.
   header badge, or choose **Capy team** from the side panel's **+** menu.
 - The side panel shows the lead and explicitly registered positions, live running
   state, last outcome and scheduled-wait reason. Click a row to open its session.
-- Registered workers get only a header badge. Unrelated or detached sessions get
-  no team UI. Multiple teams stay scoped to the selected session and server.
+- Registered workers get only a header badge. Unrelated or detached sessions show the muted
+  project total (`Teams · N in project`) and can open the switcher, but no team detail UI.
+  Multiple teams stay scoped to the selected session and server.
 - Worker failures and team questions use Desktop toast/attention APIs. System
   notifications respect the user's settings and are deduplicated across windows.
 - This is a **side panel/tab**, not an insertion into Desktop's left session-list
@@ -58,7 +59,7 @@ On startup the plugin maintains one marked section in your global `~/.config/ope
 
 opencode loads this file **additively** with every project's own `AGENTS.md` — project rules always apply too, and **solo sessions get the full behavior without a team**.
 
-- Existing file content is preserved; only the marked section is managed, idempotently.
+- Existing file content is preserved; the marked section is managed idempotently. As a migration, unmarked Markdown blocks that are near-verbatim copies (≥80% identical lines) of the legacy autonomy text — the raw pre-plugin file or the retired continuity block — are also removed; user-rewritten rules with their own wording always survive. Timestamped backups (newest 3) sit next to the file.
 - Opt out by replacing the section with `<!-- capy-lead:autonomy:disabled -->`, or set `CAPY_LEAD_SKIP_AGENTS=1`.
 
 ## Tests
@@ -89,7 +90,7 @@ opencode plugin update capytron/opencode-capy-lead
 Pin to a specific version by tag:
 
 ```sh
-opencode plugin add capytron/opencode-capy-lead#v0.8.2
+opencode plugin add capytron/opencode-capy-lead#v0.8.3
 ```
 
 Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` · `v0.6.0` · `v0.6.1` · `v0.6.2` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
@@ -114,8 +115,7 @@ One session belongs to at most one team and role. A human may promote a worker w
 |---|---|
 | `/capy-lead-init [text]` | Make this session a lead; preserve its existing team on re-init. |
 | `/capy-set-persona <text>` | Update the calling lead's persona only. |
-| `/capy-team-info` | Text overview of all teams (now led by team names). |
-| `/capy-team-info` | Show this session's team, or all project teams when called outside a team. |
+| `/capy-team-info` | Text overview: your team, or every team in the project when called outside a team. |
 | `/capy-team-name` | Rename the calling lead's team: `<name>`. |
 | `/capy-lead-detach [leadID\|all]` | Release coordination without deleting sessions. From an unrelated session, specify the target shown by team-info. |
 | `/capy-lead-destroy [leadID\|all]` | Safe cleanup alias: release the target team and preserve all sessions. **No recursive session deletion.** |

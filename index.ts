@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { readFile, mkdir, writeFile } from "node:fs/promises"
+import { readFile, mkdir, writeFile, rename, readdir, rm } from "node:fs/promises"
 
 /** Multi-team orchestration. No child becomes a position without explicit add. */
 export default {
@@ -254,12 +254,16 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
       const next = (stripped ? stripped + "\n\n" : "") + autonomySection() + "\n"
       if (next === existing) return
       // Backup, then write atomically: a crash mid-write must never corrupt
-      // the file every session on this machine loads.
+      // the file every session on this machine loads. The temp name carries a
+      // random suffix so concurrent setups in one process cannot collide.
       if (existing) await writeFile(`${file}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`, existing)
-      const tmp = `${file}.tmp-${process.pid}`
+      const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`
       await mkdir(join(file, ".."), { recursive: true })
       await writeFile(tmp, next)
       await rename(tmp, file)
+      // Keep only the newest few backups; version churn must not pile files up.
+      const backups = (await readdir(join(file, ".."))).filter((name) => name.startsWith("AGENTS.md.bak-")).sort()
+      for (const stale of backups.slice(0, Math.max(0, backups.length - 3))) await rm(join(join(file, ".."), stale))
     }
 
     const bind = async (id, persona, human) => {

@@ -28,6 +28,8 @@ async function fixture(seed = {}, options = {}) {
     },
     mkdir: async () => {}, writeFile: async (path, content) => { files.set(path, content) },
     rename: async (from, to) => { files.set(to, files.get(from) ?? ""); files.delete(from) },
+    readdir: async (dir) => [...files.keys()].filter((path) => path.startsWith(`${dir}/`)).map((path) => path.slice(dir.length + 1)),
+    rm: async (path) => { files.delete(path) },
     setTimeout, clearTimeout,
     setInterval: (fn) => { intervals.push(fn); return fn }, clearInterval: () => {},
     Bun: { file: () => ({ json: async () => ({}), exists: async () => false, text: async () => "" }), write: async () => 0, spawnSync: () => ({ stdout: "" }) },
