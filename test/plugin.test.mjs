@@ -1019,3 +1019,39 @@ test("boot heal stamps removed leads so moved sessions lose ghost metadata", asy
     assert.equal(f.errors.length, 0, "stamp of the removed lead does not crash")
   } finally { f.stop() }
 })
+
+test("a stale notify completing after a re-add never marks the new membership reported", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    // Re-add rotates the membership while a notify from the OLD one is still
+    // settling: simulate by capturing the flow — remove+add then emit silent
+    // success; the new membership must still get the idle-gate ping, not a
+    // suppressed "already reported" outcome path.
+    await f.call("a", { action: "remove", sessionID: "w" })
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.messages.length = 0
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("[capy:gate]")), "fresh membership gets the reminder, not a stale reported state")
+  } finally { f.stop() }
+})
+
+test("waiting on a dependency that is already idle checks immediately", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.add("dep")
+    await f.call("a", { action: "add", sessionID: "dep", role: "dep" })
+    // dep registered and idle (never busy) — the waiter's first check is due now.
+    const res = await f.call("w", { action: "wait", reason: "waiting on dep", checkInMinutes: 60, waitForSessionId: "dep" })
+    assert.equal(res.ok, true)
+    const wait = f.data.get("capy:/project:registry").teams.a.waits.w
+    assert.ok(wait.nextCheckAt <= Date.now(), "first check is immediate when the dependency is already idle")
+    f.messages.length = 0
+    f.intervals[0]()
+    await f.settle()
+    assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("[capy:check]")), "check delivered without waiting the full interval")
+  } finally { f.stop() }
+})

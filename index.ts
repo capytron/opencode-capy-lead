@@ -517,6 +517,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
               throw new Error("Report delivery failed; scheduled wait is preserved")
             }
             if (urgent) notices.set(id, Date.now())
+            let stillOwned = false
             await mutate(async () => {
               const registry = await load()
               const current = role(registry, id)
@@ -524,6 +525,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
               // completing after a re-add must not mark the new membership
               // as reported, and must not touch the new wait revision.
               if (!owns(registry, member, id)) return
+              stillOwned = true
               if (kind === "question" || kind === "blocked") {
                 current.worker.lastOutcome = kind
                 current.worker.lastOutcomeTime = Date.now()
@@ -534,7 +536,7 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
               if (kind !== "progress" && current.team.waits[id]?.revision === oldRevision) delete current.team.waits[id]
               await save(registry)
             })
-            activity.set(id, { reported: true, kind, pinged: false, escalated: false })
+            if (stillOwned) activity.set(id, { reported: true, kind, pinged: false, escalated: false })
             await stamp(member.leadID)
             // Workers sometimes bury questions in progress updates; progress never
             // wakes the lead, so nudge the worker instead of losing the question.
@@ -558,9 +560,18 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
                 await save(registry)
                 return
               }
+              // A registered dependency that is already idle finished while we
+              // were registering (its acceleration event fired before this
+              // wait existed): start with an immediate check instead of
+              // waiting out the full interval for something already done.
+              const depWorker = input.waitForSessionId
+                ? Object.values(registry.teams).flatMap((team) => (team?.workers?.[input.waitForSessionId] ? [team.workers[input.waitForSessionId]] : []))
+                : []
+              const depAlreadyIdle = depWorker.length === 1 && !depWorker[0].busy
               current.team.waits[id] = {
                 sessionID: id, role: current.worker.role, reason: line(input.reason, 300),
-                nextCheckAt: Date.now() + minutes * 60000, revision: randomUUID(),
+                nextCheckAt: depAlreadyIdle ? Date.now() : Date.now() + minutes * 60000,
+                revision: randomUUID(),
                 maxChecks: previous?.maxChecks ?? Math.min(20, limit(input.maxChecks, 6)), checkCount: previous?.checkCount ?? 0,
                 status: "waiting", waitForSessionID: input.waitForSessionId,
               }
@@ -786,8 +797,12 @@ You are a continuous coding agent. Default to finishing: work each task end-to-e
       }
     })()
     const heartbeat = setInterval(() => void tick(), 60000)
-    // Reconcile after hooks, commands, tools and the event subscriber are ready.
-    void tick()
+    // Reconcile after hooks, commands, tools and the event subscriber are
+    // ready — delayed a few seconds so live session.status events can mark
+    // genuinely busy workers before the first tick delivers a due check into
+    // a running execution (busy was blind-reset at boot).
+    const bootTick = setTimeout(() => void tick(), 8000)
+    controller.signal.addEventListener("abort", () => clearTimeout(bootTick), { once: true })
     // Manage the global autonomy section once per server start; failures never
     // block the plugin.
     await installAutonomy().catch(error => console.error("[capy-lead] agents.md:", error))

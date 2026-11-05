@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.2 — 2026-11-05
+
+**Astra's three follow-up hypotheses closed** (82 tests):
+
+- A stale notify completing after a remove+add no longer marks the fresh membership as reported — the activity write now happens only when the post-send bookkeeping still owns the same membership, so a genuinely silent first round still gets the idle-gate reminder.
+- Registering a wait on a dependency that is already an idle registered worker starts with an immediate check instead of waiting out the full interval for something already finished.
+- The boot reconciliation tick is delayed ~8s so live session.status events can re-mark genuinely busy workers before a due check is delivered into a running execution (busy was blind-reset at boot).
+
+
 ## v0.9.1 — 2026-11-05
 
 **Astra "what else is broken" round — all seven confirmed findings fixed** (80 tests):
