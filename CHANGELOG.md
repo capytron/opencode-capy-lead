@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.10.1 — 2026-11-07
+
+**Prompt-sharpening round (Astra-reviewed plan; text-only, no logic/state changes)** — committed without a version tag by owner policy (tags mark curated stable points only):
+
+- Tool description now teaches evidence-based done reports: state the observed result against the assigned acceptance criteria plus verification limits — never a bare "finished" (merges the A1+A2 proposal; no rigid vocabulary).
+- `[capy:decision]` no longer tells the LEAD to "conclude via notify" — an action only registered workers have. It now says: decide the next action and have the worker report its outcome.
+- The L2 contract acknowledges existing tracking rules (".capy/team.md") without gating on a scaffold marker.
+- "[capy:*] messages" split into engine coordination notices vs untrusted worker reports (watchdog/decision/check were mislabeled as worker reports).
+- Quota error reworded to close the relabeling loophole (progress → blocked to dodge the cap).
+- Long-text teaching error points to an assigned report/scratch file instead of "ticket" (workers must not write tracking files — lead-only in the workspace framework).
+- Tracking-choice "None" no longer contradicts the ticket assumption; L2 "give each position its ticket" softened to "assignment; link its ticket if any".
+- B1 (ticket pointer on add) and B2 (wait end-condition field) remain deferred pending production evidence.
+
+
 ## v0.10.0 — 2026-11-07
 
 **Workspace mode — the utility-workspace framework now ships inside the plugin** (85 tests):
