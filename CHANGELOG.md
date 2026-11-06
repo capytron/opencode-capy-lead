@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.10.0 — 2026-11-07
+
+**Workspace mode — the utility-workspace framework now ships inside the plugin** (85 tests):
+
+- New command `/capy-workspace-init`: scaffolds the owner's workspace framework into any directory — rules-only AGENTS.md constitution, one-home knowledge topology (FLEET / inventory / kb / howto / PLANS / project), `.capy` utility-mode ticket tracking, and a deferred SOPS+age vault template (OS-neutral: no keychain dependency, runtime consumption via `sops exec-env`, first-secret bootstrap with a one-time key-backup RECOMMENDATION — never a gate).
+- Non-destructive by design: existing files are never touched, reruns are no-ops, and the pre-commit staged-vault hook (rename-aware) installs automatically in git repositories. Provenance recorded in `.capy/workspace.json` (template + plugin version, file list).
+- The framework content carries everything hardened through three review rounds: empirically verified failure-path recipes (backup lifecycle deletes plaintext sources; file-only consumers keep real exit statuses), the session-start crash sweep, proportional-strictness rules (one grep per scope, single-write transcript honesty, no double-asking the owner).
+- Machine-generic template: host manuals, inventory records and FLEET facts are per-machine and intentionally absent — they are created at onboarding.
+
+
 ## v0.9.2 — 2026-11-05
 
 **Astra's three follow-up hypotheses closed** (82 tests):

@@ -26,7 +26,7 @@ async function fixture(seed = {}, options = {}) {
       if (path.endsWith("config.json") && options.config) return JSON.stringify(options.config)
       throw Object.assign(new Error("not found"), { code: "ENOENT" })
     },
-    mkdir: async () => {}, writeFile: async (path, content) => { files.set(path, content) },
+    mkdir: async () => {}, writeFile: async (path, content) => { files.set(path, content) }, chmod: async () => {},
     rename: async (from, to) => { files.set(to, files.get(from) ?? ""); files.delete(from) },
     readdir: async (dir) => [...files.keys()].filter((path) => path.startsWith(`${dir}/`)).map((path) => path.slice(dir.length + 1)),
     rm: async (path) => { files.delete(path) },
@@ -1053,5 +1053,47 @@ test("waiting on a dependency that is already idle checks immediately", async ()
     f.intervals[0]()
     await f.settle()
     assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("[capy:check]")), "check delivered without waiting the full interval")
+  } finally { f.stop() }
+})
+
+test("capy-workspace-init scaffolds the full framework without touching anything existing", async () => {
+  const f = await fixture()
+  try {
+    const report = await f.command("a", "capy-workspace-init")
+    for (const path of ["AGENTS.md", "FLEET.md", "PLANS.md", ".gitignore", ".sops.yaml", ".capy/index.md", ".capy/team.md", "howto/HOWTO-init.md", "howto/HOWTO-secrets.md", "howto/HOWTO-ops-safety.md", "howto/HOWTO-audit.md", "inventory/inventory.json", "kb/README.md", "project/README.md", "secrets/INDEX.md"]) {
+      assert.ok(f.files.has(`/project/${path}`), `${path} created`)
+    }
+    assert.ok(!f.files.has("/project/.git/hooks/pre-commit"), "no hook outside a git repository")
+    assert.ok(report.includes("git init"), "report points to git init as the next step")
+    assert.ok(!f.files.get("/project/AGENTS.md").includes("dgx06"), "template is machine-generic")
+    assert.ok(f.files.get("/project/howto/HOWTO-secrets.md").includes("First-secret bootstrap"), "carries the deferred-vault doctrine")
+    const marker = JSON.parse(f.files.get("/project/.capy/workspace.json"))
+    assert.equal(marker.template, "1.0.0")
+    assert.equal(marker.files.length, 16)
+    assert.equal(marker.hook.includes("not a git"), true)
+  } finally { f.stop() }
+})
+
+test("capy-workspace-init installs the pre-commit hook when the directory is a git repository", async () => {
+  const f = await fixture({}, { files: { "/project/.git/HEAD": "ref: refs/heads/main\n" } })
+  try {
+    await f.command("a", "capy-workspace-init")
+    const hook = f.files.get("/project/.git/hooks/pre-commit")
+    assert.ok(hook.startsWith("#!/bin/sh"), "hook installed")
+    assert.ok(hook.includes("--diff-filter=ACMR"), "hook is the current rename-aware version")
+    assert.ok(JSON.parse(f.files.get("/project/.capy/workspace.json")).hook === "installed")
+  } finally { f.stop() }
+})
+
+test("capy-workspace-init never overwrites: existing files survive and reruns are no-ops", async () => {
+  const f = await fixture({}, { files: { "/project/FLEET.md": "my own fleet facts\n", "/project/PLANS.md": "custom plans\n" } })
+  try {
+    const first = await f.command("a", "capy-workspace-init")
+    assert.ok(first.includes("skipped 2 existing"))
+    assert.equal(f.files.get("/project/FLEET.md"), "my own fleet facts\n", "user file untouched")
+    assert.equal(f.files.get("/project/PLANS.md"), "custom plans\n")
+    const second = await f.command("a", "capy-workspace-init")
+    assert.ok(second.includes("Created 0 file(s)"), "second run creates nothing")
+    assert.equal(f.files.get("/project/FLEET.md"), "my own fleet facts\n", "still untouched after rerun")
   } finally { f.stop() }
 })

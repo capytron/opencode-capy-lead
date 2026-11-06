@@ -90,7 +90,7 @@ opencode plugin update capytron/opencode-capy-lead
 Pin to a specific version by tag:
 
 ```sh
-opencode plugin add capytron/opencode-capy-lead#v0.9.2
+opencode plugin add capytron/opencode-capy-lead#v0.10.0
 ```
 
 Available tags: `v0.3.0` · `v0.3.1` · `v0.4.0` · `v0.4.1` · `v0.5.0` · `v0.5.1` · `v0.6.0` · `v0.6.1` · `v0.6.2` — see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
@@ -120,6 +120,7 @@ One session belongs to at most one team and role. A human may promote a worker w
 | `/capy-lead-detach [leadID\|all]` | Release coordination without deleting sessions. From an unrelated session, specify the target shown by team-info. |
 | `/capy-lead-destroy [leadID\|all]` | Safe cleanup alias: release the target team and preserve all sessions. **No recursive session deletion.** |
 | `/capy-team-view` | Team switcher from any session (most recently active first; opens the team lead). |
+| `/capy-workspace-init` | Scaffold the **utility-workspace framework** into this directory: an agent-operating constitution (AGENTS rules), knowledge homes (FLEET/inventory/kb/howto/PLANS), ticket tracking (`.capy/`), and a deferred SOPS+age vault template. Existing files are never touched; reruns are no-ops; the pre-commit vault hook installs automatically when the directory is a git repository. Provenance is recorded in `.capy/workspace.json`. The vault itself stays deferred until the first real secret (the scaffolded `HOWTO-secrets §1a` bootstrap). |
 
 Closing a client/tab is not deleting a session. To release an old team you cannot find, use team-info and detach from a new session; attaching to the old lead is unnecessary. Deleting sessions, when desired, is an explicit host UI operation.
 

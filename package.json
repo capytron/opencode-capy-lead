@@ -1,7 +1,7 @@
 {
   "name": "opencode-capy-lead",
-  "version": "0.9.2",
-  "description": "capy-lead \u2014 multi-team lead/worker coordination for opencode: independent leads per project, explicit persistent positions with overflow recovery and scheduled check-backs, idle gate and silence watchdog, TUI team strip/tree scoped to the current session.",
+  "version": "0.10.0",
+  "description": "capy-lead \u2014 multi-team lead/worker coordination for opencode: independent leads per project, explicit persistent positions with overflow recovery and scheduled check-backs, idle gate and silence watchdog, TUI team strip/tree, and a scaffoldable utility-workspace framework (workspace mode).",
   "type": "module",
   "private": true,
   "scripts": {
