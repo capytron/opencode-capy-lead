@@ -1037,29 +1037,12 @@ test("a stale notify completing after a re-add never marks the new membership re
   } finally { f.stop() }
 })
 
-test("waiting on a dependency that is already idle checks immediately", async () => {
-  const f = await fixture()
-  try {
-    await f.command("a", "capy-lead-init")
-    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
-    f.add("dep")
-    await f.call("a", { action: "add", sessionID: "dep", role: "dep" })
-    // dep registered and idle (never busy) — the waiter's first check is due now.
-    const res = await f.call("w", { action: "wait", reason: "waiting on dep", checkInMinutes: 60, waitForSessionId: "dep" })
-    assert.equal(res.ok, true)
-    const wait = f.data.get("capy:/project:registry").teams.a.waits.w
-    assert.ok(wait.nextCheckAt <= Date.now(), "first check is immediate when the dependency is already idle")
-    f.messages.length = 0
-    f.intervals[0]()
-    await f.settle()
-    assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("[capy:check]")), "check delivered without waiting the full interval")
-  } finally { f.stop() }
-})
 
 test("capy-workspace-init scaffolds the full framework without touching anything existing", async () => {
   const f = await fixture()
   try {
     const report = await f.command("a", "capy-workspace-init")
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("Workspace framework scaffolded")), "report reaches the session (host discards return values)")
     for (const path of ["AGENTS.md", "FLEET.md", "PLANS.md", ".gitignore", ".sops.yaml", ".capy/index.md", ".capy/team.md", "howto/HOWTO-init.md", "howto/HOWTO-secrets.md", "howto/HOWTO-ops-safety.md", "howto/HOWTO-audit.md", "inventory/inventory.json", "kb/README.md", "project/README.md", "secrets/INDEX.md"]) {
       assert.ok(f.files.has(`/project/${path}`), `${path} created`)
     }
@@ -1094,6 +1077,81 @@ test("capy-workspace-init never overwrites: existing files survive and reruns ar
     assert.equal(f.files.get("/project/PLANS.md"), "custom plans\n")
     const second = await f.command("a", "capy-workspace-init")
     assert.ok(second.includes("Created 0 file(s)"), "second run creates nothing")
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("skipped 2 existing")), "rerun report delivered too")
     assert.equal(f.files.get("/project/FLEET.md"), "my own fleet facts\n", "still untouched after rerun")
+  } finally { f.stop() }
+})
+
+test("a wait on a dependency that never finished does not spin (Argon P0)", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.add("dep")
+    await f.call("a", { action: "add", sessionID: "dep", role: "dep" })
+    await f.call("w", { action: "wait", reason: "waiting on dep", checkInMinutes: 30, waitForSessionId: "dep" })
+    let wait = f.data.get("capy:/project:registry").teams.a.waits.w
+    assert.ok(wait.nextCheckAt > Date.now(), "no lastOutcome → no acceleration")
+    await f.emit("session.execution.succeeded", "dep")
+    wait.checkCount = 1; wait.status = "waiting"
+    f.data.set("capy:/project:registry", f.data.get("capy:/project:registry"))
+    await f.call("w", { action: "wait", reason: "still waiting", checkInMinutes: 30, waitForSessionId: "dep" })
+    wait = f.data.get("capy:/project:registry").teams.a.waits.w
+    assert.ok(wait.nextCheckAt > Date.now(), "re-registration (previous exists) honors the interval")
+    assert.equal(wait.checkCount, 1, "check count inherited, not reset")
+  } finally { f.stop() }
+})
+
+test("a first wait on a dependency that verifiably finished still checks immediately", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    f.add("dep")
+    await f.call("a", { action: "add", sessionID: "dep", role: "dep" })
+    await f.emit("session.execution.succeeded", "dep")
+    await f.call("w", { action: "wait", reason: "dep looks done", checkInMinutes: 30, waitForSessionId: "dep" })
+    const wait = f.data.get("capy:/project:registry").teams.a.waits.w
+    assert.ok(wait.nextCheckAt <= Date.now(), "verifiably-finished dependency → immediate first check")
+  } finally { f.stop() }
+})
+
+test("a terminal decision wait no longer suppresses the idle gate (Argon P1)", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    await f.call("w", { action: "wait", reason: "need input", checkInMinutes: 1, maxChecks: 1 })
+    const reg0 = f.data.get("capy:/project:registry"); reg0.teams.a.waits.w.checkCount = 1
+    f.data.set("capy:/project:registry", reg0)
+    f.intervals[0](); await f.settle()
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:decision]")), "decision reached the lead")
+    f.messages.length = 0
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(f.messages.some(m => m.sessionID === "w" && m.text.includes("[capy:gate]")), "gate fires despite the terminal decision wait")
+  } finally { f.stop() }
+})
+
+test("a new execution cycle re-arms escalation (no permanently deaf gate)", async () => {
+  const f = await fixture()
+  try {
+    await f.command("a", "capy-lead-init")
+    await f.call("a", { action: "add", sessionID: "w", role: "w1" })
+    await f.emit("session.execution.succeeded", "w")
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:escalate]")))
+    f.messages.length = 0
+    await f.emit("session.status", "w", { status: { type: "busy" } })
+    await f.emit("session.execution.succeeded", "w")
+    assert.ok(f.messages.some(m => m.sessionID === "a" && m.text.includes("[capy:escalate]")), "escalation re-fires on the next silent cycle")
+  } finally { f.stop() }
+})
+
+test("binding via the tool sends onboarding to the new lead (Argon P2)", async () => {
+  const f = await fixture()
+  try {
+    await f.call("b", { action: "bind" })
+    assert.ok(f.messages.some(m => m.sessionID === "b" && m.text.includes("capy-lead enabled")), "tool-bound lead receives onboarding")
+    assert.ok(f.messages.some(m => m.sessionID === "b" && m.text.includes("Name your team")), "onboarding teaches team naming")
   } finally { f.stop() }
 })

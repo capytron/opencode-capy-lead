@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.10.2 — 2026-11-08
+
+**Argon full-review round (8.4/10) — every CONFIRMED finding fixed** (89 tests; no version tag per owner policy):
+
+Engine:
+- **depAlreadyIdle 0ms spin-loop (P0)**: the v0.9.2 immediate-check acceleration fired on EVERY wait registration — a never-run or self-waiting dependency accelerated re-registrations too, burning the whole check budget in seconds. Acceleration now requires: first wait, dependency verifiably finished (lastOutcome set), idle, and not itself waiting.
+- **Terminal "decision" waits no longer suppress the idle gate (P1)** — a worker going silent after the lead's decision still gets the ping/escalate cycle.
+- **Escalation re-arms on a new execution cycle (P2)** — re-tasking the same worker no longer faces a permanently deaf gate; escalate/ping state sets now spread instead of replacing (pinged was being dropped, causing a redundant ping loop).
+- **Tool `bind` now sends onboarding and creates the workspace dirs** like /capy-lead-init does (previously silent).
+- Decision message no longer claims budget exhaustion when it fired on a woken-timeout; tool description states the actual notify caps (200/400).
+- TUI: failed outcome is never masked by a stale wait (✗ over ⏳, failed count unfiltered); router.current() guarded. Desktop chip shows Failed over Waiting.
+
+Workspace mode:
+- **/capy-workspace-init report now goes through send() (P0)** — the host DISCARDS slash-command return values (204); previously the user saw nothing while files were created silently.
+- Reruns union the provenance file list instead of erasing it; plugin version via PLUGIN_VERSION const (was hardcoded 0.10.0); git worktrees detected (.git file) with a manual-hook hint instead of crashing.
+- Pre-commit advisory skips vault files and secrets/INDEX.md (encrypted key names and "per secret: id" prose false-positived every commit); session sweep and audit detector are find-based (an empty/deferred vault no longer glob-errors); backup recipe gains a failure arm that removes the plaintext candidate; hook step reference corrected; systemd example uses generic paths in the template.
+- team.md concurrency wording harmonized with multi-lead; L1 autonomy gains a project-framework carve-out (an ops workspace's confirmation gates govern infra work there — resolving the direct contradiction with the workspace template's mission).
+- binding gate covers the chmod import; one superseded loose test replaced by an exact pair.
+
+
 ## v0.10.1 — 2026-11-07
 
 **Prompt-sharpening round (Astra-reviewed plan; text-only, no logic/state changes)** — committed without a version tag by owner policy (tags mark curated stable points only):

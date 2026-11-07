@@ -219,7 +219,7 @@ export default {
     const openPanel = () => {
       const route = context.ui.router.current()
       const current = context.ui.panel.current()
-      if (route.type === "session" && current?.sessionID === route.sessionID && current.name === "capy-lead.teams") {
+      if (route?.type === "session" && current?.sessionID === route.sessionID && current.name === "capy-lead.teams") {
         context.ui.panel.close()
         return
       }
@@ -253,13 +253,15 @@ export default {
 }
 
 function outcomeText(row, theme) {
+  // A failure is the more urgent fact: never mask it behind a (possibly
+  // stale) wait — a worker that crashed mid-wait must show ✗, not ⏳.
+  if (row.outcome === "failed")
+    return { text: `✗ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.error.base }
   if (row.waiting) return { text: `⏳ ${row.waiting}`.trim(), color: theme.text.muted }
   if (row.outcome === "question") return { text: `❓ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.muted }
   if (row.outcome === "blocked") return { text: `⚠ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.error.base }
   if (row.outcome === "succeeded")
     return { text: `✓ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.success.base }
-  if (row.outcome === "failed")
-    return { text: `✗ ${timeAgo(row.outcomeTime)}`.trim(), color: theme.text.feedback.error.base }
   if (row.outcome) return { text: row.outcome, color: theme.text.muted }
   return { text: "", color: theme.text.muted }
 }
@@ -273,7 +275,7 @@ function TeamStrip(props) {
       running: workers.filter((row) => row.running).length,
       // A succeeded outcome while waiting is not done — the wait owns it.
       done: workers.filter((row) => row.outcome === "succeeded" && !row.waiting).length,
-      failed: workers.filter((row) => row.outcome === "failed" && !row.waiting).length,
+      failed: workers.filter((row) => row.outcome === "failed").length,
       total: workers.length,
     }
   })

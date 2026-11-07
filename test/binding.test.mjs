@@ -32,7 +32,7 @@ test("the VM harness never injects a node builtin the source does not import", a
   }
   // Every fs/path/crypto/os identifier the sandbox provides on the host side
   // of test/plugin.test.mjs must be covered by a real import here.
-  const provided = ["readFile", "mkdir", "writeFile", "rename", "readdir", "rm", "homedir", "join", "randomUUID"]
+  const provided = ["readFile", "mkdir", "writeFile", "rename", "readdir", "rm", "chmod", "homedir", "join", "randomUUID"]
   const missing = provided.filter((name) => !imported.has(name))
   assert.deepEqual(missing, [], `harness injects ${missing.join(", ")} but index.ts does not import them — the VM tests would mask a runtime ReferenceError`)
 })
