@@ -74,7 +74,13 @@ opencode loads this file **additively** with every project's own `AGENTS.md` —
 
 ## Troubleshooting
 
-**`opencode plugin update` says "Plugin is not configured: …"** — the CLI matches the *exact* string stored in your config. Check what your machine has (`cat ~/.config/opencode/opencode.json`, the `plugins` array), then either pass that exact string to `update`, or reinstall cleanly:
+**`opencode plugin update` says "Plugin is not configured: …"** — two causes, same message. (1) The CLI matches the *exact* string stored in your config: check `cat ~/.config/opencode/opencode.json`, the `plugins` array, and pass that exact string. (2) Even with the exact string, a service that just restarted (typically right after an opencode update) briefly reports an empty plugin inventory — the same error appears until it finishes loading; retrying, or running `add` (which warms the install), makes the next `update` succeed. The reliable habit that avoids both: **update without a plugin name** — it skips exact matching entirely and updates every configured plugin that has a new version:
+
+```sh
+opencode plugin update
+```
+
+To reinstall cleanly instead:
 
 ```sh
 opencode plugin remove "<exact string from your config>"
@@ -84,8 +90,10 @@ opencode plugin add capytron/opencode-capy-lead
 ## Update
 
 ```sh
-opencode plugin update capytron/opencode-capy-lead
+opencode plugin update
 ```
+
+The nameless form is the recommended habit — it avoids the CLI's exact-string matching and the freshly-restarted-service race (see Troubleshooting). Updating by name also works when the service is warm:
 
 Pin to a specific version by tag:
 
